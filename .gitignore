@@ -1,0 +1,21 @@
+# venv
+venv/
+.venv/
+
+# build artifacts
+dist/
+build/
+installer/dist/
+
+# binary packages
+*.exe
+*.msi
+*.pkg
+*.jar
+*.class
+
+# python
+venv/
+.venv/
+__pycache__/
+*.pyc
