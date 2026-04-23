@@ -1,3 +1,21 @@
+"""FastAPI 서버이자 사용자 Python 프로그램 실행 관리자입니다.
+
+프로그램 전체 흐름
+1. 사용자가 브라우저, curl, Postman 같은 도구로 main.py 서버에 HTTP 요청을 보냅니다.
+2. 일반 예제 API(/hello, /todos 등)는 main.py 안에서 바로 응답합니다.
+3. 사용자 프로그램 호출 API(/apps/{program}/{path})는 src/user_programs 폴더에서
+   {program}.py 파일을 찾습니다.
+4. main.py는 HTTP 요청 정보를 JSON으로 정리해서 사용자 프로그램의 stdin으로 전달합니다.
+5. 사용자 프로그램은 stdin에서 요청 JSON을 읽고, 처리 결과 JSON을 stdout으로 출력합니다.
+6. main.py는 stdout의 JSON을 읽어 FastAPI Response로 바꾼 뒤 사용자에게 HTTP 응답합니다.
+
+동시 호출 처리 방식
+- 요청마다 새로운 Python 프로세스를 실행하므로 stdin/stdout 파이프가 요청끼리 섞이지 않습니다.
+- asyncio.create_subprocess_exec()를 사용해 사용자 프로그램 실행 중에도 서버가 다른 요청을
+  받을 수 있게 합니다.
+- PROGRAM_SEMAPHORE로 동시에 실행되는 사용자 프로그램 수를 제한해 서버 과부하를 줄입니다.
+"""
+
 from pathlib import Path
 import asyncio
 import json
@@ -54,6 +72,8 @@ class TodoUpdate(BaseModel):
 
 # 웹 요청으로 Python 프로그램을 실행할 때 받을 데이터 형식입니다.
 class ProgramRunRequest(BaseModel):
+    """POST /programs/run에서 사용자 프로그램을 직접 실행할 때 받는 요청 형식입니다."""
+
     program: str = Field(
         ...,
         description="실행할 Python 파일명 또는 user_programs 기준 상대 경로. 예: hello.py",
@@ -77,6 +97,8 @@ class ProgramRunRequest(BaseModel):
 
 
 class ProgramHttpResult(BaseModel):
+    """사용자 프로그램이 stdout으로 출력해야 하는 HTTP 응답 형식입니다."""
+
     status_code: int = Field(default=200, ge=100, le=599, description="HTTP 응답 상태 코드")
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP 응답 헤더")
     body: object = Field(default_factory=dict, description="HTTP 응답 본문")
@@ -93,6 +115,7 @@ def find_todo(todo_id: int) -> Optional[dict]:
 
 def ensure_user_program_dir() -> None:
     # 폴더가 없으면 자동 생성해서 사용자가 프로그램 파일을 넣기 쉽게 합니다.
+    # 예: 처음 실행 시 src/user_programs 폴더가 없더라도 여기서 만들어집니다.
     USER_PROGRAM_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -100,12 +123,16 @@ def resolve_user_program(program: str) -> Path:
     # 웹 요청 값으로 서버의 아무 파일이나 실행하지 못하도록 user_programs 폴더 안으로 제한합니다.
     ensure_user_program_dir()
 
+    # 사용자가 "sample.py"라고 보내면 src/user_programs/sample.py로 해석합니다.
+    # resolve()는 ".." 같은 상대 경로를 모두 정리한 실제 절대 경로를 만들어 줍니다.
     program_path = (USER_PROGRAM_DIR / program).resolve()
     try:
+        # relative_to()가 성공해야 program_path가 USER_PROGRAM_DIR 안에 있다는 뜻입니다.
         program_path.relative_to(USER_PROGRAM_DIR.resolve())
     except ValueError:
         raise HTTPException(status_code=400, detail="user_programs 폴더 밖의 파일은 실행할 수 없습니다.")
 
+    # 이 예제는 Python 파일 실행만 지원하므로 .py 확장자만 허용합니다.
     if program_path.suffix.lower() != ".py":
         raise HTTPException(status_code=400, detail="Python .py 파일만 실행할 수 있습니다.")
     if not program_path.exists() or not program_path.is_file():
@@ -116,6 +143,7 @@ def resolve_user_program(program: str) -> Path:
 
 def build_program_command(program_path: Path, args: list[str] | None = None) -> list[str]:
     # 현재 FastAPI 서버와 같은 Python 실행 파일로 사용자 프로그램을 실행합니다.
+    # shell=True를 쓰지 않고 리스트로 명령을 전달하면 명령어 주입 위험을 줄일 수 있습니다.
     return [sys.executable, str(program_path), *(args or [])]
 
 
@@ -151,11 +179,18 @@ async def run_user_program_process(
     # /programs/run 과 /apps/{program} 양쪽에서 같은 방식으로 프로세스를 실행합니다.
     # 각 HTTP 요청마다 새 프로세스를 만들기 때문에 stdin/stdout 파이프는 서로 공유되지 않습니다.
     command = build_program_command(program_path, args)
+
+    # request_id는 로그/응답에서 "이 결과가 어떤 요청의 결과인지" 추적하기 위한 값입니다.
+    # HTTP 호출에서는 클라이언트가 X-Request-Id 헤더로 직접 줄 수도 있고, 없으면 새로 만듭니다.
     request_id = request_id or uuid4().hex
     started_at = time.perf_counter()
+
+    # subprocess는 bytes를 주고받으므로 문자열 stdin을 UTF-8 bytes로 바꿉니다.
     stdin_bytes = stdin.encode("utf-8") if stdin is not None else None
 
     async with PROGRAM_SEMAPHORE:
+        # 세마포어 안에 들어온 요청만 실제 프로세스를 실행합니다.
+        # 동시에 너무 많은 프로그램이 실행되면 OS/서버 자원이 부족해질 수 있기 때문입니다.
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
@@ -165,11 +200,14 @@ async def run_user_program_process(
         )
 
         try:
+            # communicate()는 stdin을 보내고, 프로그램이 종료될 때까지 stdout/stderr를 모읍니다.
+            # wait_for()로 제한 시간을 걸어 무한 실행되는 프로그램을 막습니다.
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(stdin_bytes),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
+            # 제한 시간을 넘긴 프로그램은 강제로 종료하고, 그때까지 나온 출력만 응답에 담습니다.
             process.kill()
             stdout_bytes, stderr_bytes = await process.communicate()
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
@@ -200,6 +238,9 @@ async def run_user_program_process(
 async def build_http_envelope(request: Request, subpath: str) -> dict:
     # 실제 HTTP 요청 정보를 사용자 프로그램이 이해하기 쉬운 JSON 형태로 변환합니다.
     request_id = request.headers.get("x-request-id") or uuid4().hex
+
+    # request.body()는 HTTP 요청 본문을 bytes로 읽어 옵니다.
+    # 사용자 프로그램이 텍스트와 JSON 둘 다 쓸 수 있도록 body, json 두 형태로 전달합니다.
     body_bytes = await request.body()
     body_text = body_bytes.decode("utf-8", errors="replace") if body_bytes else ""
     json_body = None
@@ -227,9 +268,11 @@ def parse_program_http_response(program_name: str, run_info: dict) -> ProgramHtt
     stdout = run_info.get("stdout") or ""
     stderr = run_info.get("stderr") or ""
 
+    # 시간이 너무 오래 걸린 경우 클라이언트에게 504 Gateway Timeout 형태로 알려 줍니다.
     if run_info.get("timed_out"):
         raise HTTPException(status_code=504, detail=run_info)
 
+    # 사용자 프로그램 자체에서 예외가 나거나 종료 코드가 0이 아니면 서버 오류로 처리합니다.
     if run_info.get("return_code") != 0:
         raise HTTPException(
             status_code=500,
@@ -242,6 +285,7 @@ def parse_program_http_response(program_name: str, run_info: dict) -> ProgramHtt
         )
 
     try:
+        # stdout은 문자열이므로 json.loads()로 Python dict/list 형태로 바꿉니다.
         payload = json.loads(stdout)
     except json.JSONDecodeError:
         raise HTTPException(
@@ -254,11 +298,13 @@ def parse_program_http_response(program_name: str, run_info: dict) -> ProgramHtt
             },
         )
 
+    # Pydantic 모델로 검증하면 status_code 범위, headers 타입 같은 기본 오류를 잡을 수 있습니다.
     return ProgramHttpResult.model_validate(payload)
 
 
 def to_fastapi_response(result: ProgramHttpResult) -> Response:
     # 사용자 프로그램이 만든 응답 형식을 FastAPI 응답 객체로 변환합니다.
+    # JSON 응답은 ensure_ascii=False로 만들어 한글이 \uXXXX 형태로 깨져 보이지 않게 합니다.
     if result.media_type == "application/json":
         content = json.dumps(result.body, ensure_ascii=False)
     elif isinstance(result.body, str):
@@ -383,6 +429,7 @@ async def read_headers(x_token: Optional[str] = Header(default=None)):
 @app.get("/programs")
 async def get_programs():
     # 실행 가능한 사용자 Python 프로그램 목록을 보여 줍니다.
+    # 사용자는 이 API로 어떤 프로그램을 /apps/{program}에서 호출할 수 있는지 확인할 수 있습니다.
     programs = list_user_programs()
     return {
         "program_dir": str(USER_PROGRAM_DIR),
@@ -434,6 +481,7 @@ async def get_http_program_usage():
 async def run_program(request: ProgramRunRequest):
     # 사용자가 작성한 Python 파일을 별도 프로세스로 실행합니다.
     # shell=True를 쓰지 않기 때문에 명령어 주입 위험을 줄일 수 있습니다.
+    # 이 API는 HTTP 요청 모양을 전달하지 않고, 단순히 파일 + args + stdin으로 실행합니다.
     program_path = resolve_user_program(request.program)
     run_info = await run_user_program_process(
         program_path=program_path,
@@ -454,13 +502,19 @@ async def call_http_program(program: str, request: Request, subpath: str = ""):
     # HTTP 요청으로 들어온 program 이름을 실제 Python 파일로 찾아 실행합니다.
     # 예: GET /apps/http_sample/hello?name=Kim -> src/user_programs/http_sample.py 실행
     program_path = resolve_user_program(f"{program}.py")
+
+    # FastAPI의 Request 객체를 사용자 프로그램이 읽을 수 있는 JSON 봉투(envelope)로 바꿉니다.
     envelope = await build_http_envelope(request, subpath)
+
+    # envelope JSON을 stdin으로 넘기면 사용자 프로그램은 sys.stdin.read()로 읽을 수 있습니다.
     run_info = await run_user_program_process(
         program_path=program_path,
         stdin=json.dumps(envelope, ensure_ascii=False),
         timeout_seconds=DEFAULT_PROGRAM_TIMEOUT_SECONDS,
         request_id=envelope["request_id"],
     )
+
+    # 사용자 프로그램의 stdout JSON을 검증하고 FastAPI 응답으로 변환합니다.
     program_response = parse_program_http_response(program, run_info)
     return to_fastapi_response(program_response)
 
