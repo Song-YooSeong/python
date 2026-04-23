@@ -363,10 +363,10 @@ def apply_data_alignment(worksheet: Any, start_row: int, end_row: int, max_col: 
             cell = worksheet.cell(row=row_index, column=column_index)
             current_alignment = cell.alignment
 
-            # No는 오른쪽, 이메일은 왼쪽, 나머지는 가운데 정렬합니다.
+            # No는 오른쪽, 접속사유는 왼쪽, 나머지는 가운데 정렬합니다.
             if column_index == 1:
                 horizontal = "right"
-            elif column_index == 7:
+            elif column_index == max_col:
                 horizontal = "left"
             else:
                 horizontal = "center"
@@ -560,7 +560,7 @@ class VdiWindow:
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
 
         widths = [70, 170, 140, 110, 120, 120, 220, 130, 130, 220]
-        anchors = ["e", "center", "center", "center", "center", "center", "w", "center", "center", "w"]
+        anchors = ["e", "center", "center", "center", "center", "center", "center", "center", "center", "w"]
 
         # 각 열의 제목, 폭, 정렬을 설정합니다. 제목을 클릭하면 해당 열로 정렬됩니다.
         for index, (column_id, header, width, anchor) in enumerate(
