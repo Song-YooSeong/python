@@ -1,3 +1,12 @@
+"""
+프로그램 흐름 설명
+1. tkinter로 계산기 창을 만들고, 숫자 표시 영역과 버튼 영역을 준비합니다.
+2. 사용자가 버튼이나 키보드로 숫자와 연산자를 입력하면 내부 상태를 바꿉니다.
+3. 연산자가 눌리면 현재 숫자를 저장하고 다음 숫자 입력을 기다립니다.
+4. '='가 눌리면 저장된 값과 현재 값을 실제로 계산해 화면에 보여줍니다.
+5. 오류가 나면 화면에 Error를 표시하고 다시 계산을 시작할 수 있게 상태를 초기화합니다.
+"""
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -6,43 +15,41 @@ from tkinter import font
 
 
 class CalculatorApp:
+    """간단한 사칙연산 계산기 화면과 동작을 관리합니다."""
+
     def __init__(self, root: tk.Tk) -> None:
-        # root는 tkinter가 만든 "메인 창" 객체입니다.
+        # root는 tkinter가 만든 메인 창 객체입니다.
         self.root = root
         self.root.title("Calculator")
         self.root.geometry("360x520")
         self.root.minsize(320, 460)
         self.root.configure(bg="#f3f3f3")
 
-        # 화면에 표시할 문자열을 저장하는 변수입니다.
-        # StringVar를 쓰면 값이 바뀔 때 라벨도 자동으로 갱신됩니다.
+        # 화면에 보여줄 숫자와 계산 기록을 StringVar로 관리합니다.
         self.display_var = tk.StringVar(value="0")
         self.history_var = tk.StringVar(value="")
 
-        # current_input: 사용자가 지금 입력 중인 숫자
+        # current_input은 현재 사용자가 입력 중인 숫자 문자열입니다.
         self.current_input = "0"
-        # left_value: 연산자 왼쪽에 있는 값(예: 12 + 3 에서 12)
+        # left_value는 이전에 저장된 왼쪽 피연산자입니다.
         self.left_value: Decimal | None = None
-        # pending_operator: 아직 계산되지 않고 대기 중인 연산자
+        # pending_operator는 아직 계산되지 않고 대기 중인 연산자입니다.
         self.pending_operator: str | None = None
-        # True이면 다음 숫자 입력 시 기존 숫자를 지우고 새로 시작합니다.
+        # 다음 숫자를 새로 입력해야 하는지 표시하는 플래그입니다.
         self.reset_input = False
 
-        # 화면 구성과 키보드 연결을 시작할 때 한 번만 만듭니다.
         self._build_ui()
         self._bind_keys()
 
     def _build_ui(self) -> None:
-        # 계산기 화면에서 사용할 글꼴 크기를 정합니다.
+        """계산기 화면의 라벨과 버튼을 배치합니다."""
         display_font = font.Font(family="Segoe UI", size=30, weight="bold")
         history_font = font.Font(family="Segoe UI", size=11)
         button_font = font.Font(family="Segoe UI", size=14)
 
-        # container는 계산기 전체를 담는 바깥 프레임입니다.
         container = tk.Frame(self.root, bg="#f3f3f3", padx=12, pady=12)
         container.pack(fill="both", expand=True)
 
-        # 이전 계산식이나 현재 연산 상태를 보여주는 작은 영역입니다.
         history_label = tk.Label(
             container,
             textvariable=self.history_var,
@@ -54,7 +61,6 @@ class CalculatorApp:
         )
         history_label.pack(fill="x")
 
-        # 실제 숫자가 크게 보이는 메인 표시창입니다.
         display_label = tk.Label(
             container,
             textvariable=self.display_var,
@@ -68,17 +74,15 @@ class CalculatorApp:
         )
         display_label.pack(fill="x", pady=(0, 12))
 
-        # 버튼들을 담는 영역입니다.
         buttons = tk.Frame(container, bg="#f3f3f3")
         buttons.pack(fill="both", expand=True)
 
-        # 모든 줄과 칸이 창 크기에 맞춰 고르게 늘어나도록 설정합니다.
         for row in range(5):
             buttons.rowconfigure(row, weight=1)
         for col in range(4):
             buttons.columnconfigure(col, weight=1)
 
-        # 버튼의 글자, 눌렀을 때 실행할 함수, 배경색을 표 형태로 정리했습니다.
+        # 각 버튼은 (표시 글자, 눌렀을 때 실행할 함수, 배경색) 형태로 정리합니다.
         layout = [
             [("C", self.clear_all, "#d9d9d9"), ("BS", self.backspace, "#d9d9d9"), ("+/-", self.toggle_sign, "#d9d9d9"), ("/", lambda: self.set_operator("/"), "#ffb84d")],
             [("7", lambda: self.input_digit("7"), "#ffffff"), ("8", lambda: self.input_digit("8"), "#ffffff"), ("9", lambda: self.input_digit("9"), "#ffffff"), ("*", lambda: self.set_operator("*"), "#ffb84d")],
@@ -90,12 +94,10 @@ class CalculatorApp:
         for row_index, row in enumerate(layout):
             for col_index, (label, command, bg_color) in enumerate(row):
                 if not label:
-                    # 빈칸도 같은 크기를 유지하도록 보이지 않는 프레임을 넣습니다.
                     spacer = tk.Frame(buttons, bg="#f3f3f3")
                     spacer.grid(row=row_index, column=col_index, sticky="nsew", padx=4, pady=4)
                     continue
 
-                # 실제 버튼 생성
                 button = tk.Button(
                     buttons,
                     text=label,
@@ -110,7 +112,7 @@ class CalculatorApp:
                 button.grid(row=row_index, column=col_index, sticky="nsew", padx=4, pady=4)
 
     def _bind_keys(self) -> None:
-        # 마우스뿐 아니라 키보드로도 계산기를 조작할 수 있게 연결합니다.
+        """키보드 입력도 버튼과 같은 동작으로 연결합니다."""
         self.root.bind("<Key>", self._handle_keypress)
         self.root.bind("<Return>", lambda _: self.calculate_result())
         self.root.bind("<KP_Enter>", lambda _: self.calculate_result())
@@ -118,7 +120,7 @@ class CalculatorApp:
         self.root.bind("<Escape>", lambda _: self.clear_all())
 
     def _handle_keypress(self, event: tk.Event) -> None:
-        # keysym은 특수키 이름, char는 실제 입력 문자입니다.
+        """사용자가 누른 키를 해석해 알맞은 기능을 호출합니다."""
         key = event.keysym
         char = event.char
 
@@ -142,20 +144,18 @@ class CalculatorApp:
             self.clear_all()
 
     def input_digit(self, digit: str) -> None:
-        # 새 계산을 시작해야 하거나 오류 상태였다면 숫자를 새로 씁니다.
+        """숫자 버튼을 눌렀을 때 현재 입력 문자열을 갱신합니다."""
         if self.reset_input or self.current_input == "Error":
             self.current_input = digit
             self.reset_input = False
         elif self.current_input == "0":
-            # 맨 처음 0만 있는 상태에서는 새 숫자로 교체합니다.
             self.current_input = digit
         else:
-            # 이미 숫자가 있으면 뒤에 이어 붙입니다.
             self.current_input += digit
         self._update_display()
 
     def input_decimal(self) -> None:
-        # 소수점은 숫자 하나당 한 번만 들어갈 수 있습니다.
+        """소수점을 한 번만 입력할 수 있게 처리합니다."""
         if self.reset_input or self.current_input == "Error":
             self.current_input = "0."
             self.reset_input = False
@@ -164,7 +164,7 @@ class CalculatorApp:
         self._update_display()
 
     def clear_all(self) -> None:
-        # 계산기 상태를 처음 상태로 완전히 되돌립니다.
+        """계산기 상태를 완전히 초기화합니다."""
         self.current_input = "0"
         self.left_value = None
         self.pending_operator = None
@@ -173,19 +173,18 @@ class CalculatorApp:
         self._update_display()
 
     def backspace(self) -> None:
-        # 마지막에 입력한 글자 하나를 지웁니다.
+        """현재 입력의 마지막 글자를 지웁니다."""
         if self.reset_input or self.current_input == "Error":
             self.current_input = "0"
             self.reset_input = False
         elif len(self.current_input) <= 1 or (self.current_input.startswith("-") and len(self.current_input) == 2):
-            # 한 자리만 남았으면 0으로 돌아갑니다.
             self.current_input = "0"
         else:
             self.current_input = self.current_input[:-1]
         self._update_display()
 
     def toggle_sign(self) -> None:
-        # 양수/음수를 서로 바꿉니다.
+        """현재 숫자의 부호를 바꿉니다."""
         if self.current_input in {"0", "Error"}:
             return
         if self.current_input.startswith("-"):
@@ -195,15 +194,13 @@ class CalculatorApp:
         self._update_display()
 
     def set_operator(self, operator: str) -> None:
-        # 현재 화면의 문자열을 실제 계산 가능한 숫자(Decimal)로 바꿉니다.
+        """연산자를 저장하고 다음 숫자 입력을 준비합니다."""
         current_value = self._to_decimal(self.current_input)
         if current_value is None:
             self._show_error()
             return
 
         if self.pending_operator and not self.reset_input:
-            # 이미 연산자가 있는 상태에서 또 다른 연산자를 누르면
-            # 앞 계산을 먼저 끝내고 결과를 왼쪽 값으로 저장합니다.
             result = self._perform_operation(self.left_value, current_value, self.pending_operator)
             if result is None:
                 self._show_error()
@@ -211,17 +208,15 @@ class CalculatorApp:
             self.left_value = result
             self.current_input = self._format_decimal(result)
         else:
-            # 첫 연산이라면 현재 입력값을 왼쪽 값으로 저장합니다.
             self.left_value = current_value
 
         self.pending_operator = operator
-        # 다음 숫자 입력 때 새 숫자를 받도록 플래그를 켭니다.
         self.reset_input = True
         self.history_var.set(f"{self._format_decimal(self.left_value)} {self._symbol(operator)}")
         self._update_display()
 
     def calculate_result(self) -> None:
-        # 연산자나 왼쪽 값이 없으면 계산할 것이 없습니다.
+        """현재까지 입력된 식을 실제로 계산합니다."""
         if not self.pending_operator or self.left_value is None:
             self._update_display()
             return
@@ -237,7 +232,6 @@ class CalculatorApp:
             self._show_error()
             return
 
-        # 계산 결과를 다시 화면과 내부 상태에 저장합니다.
         self.current_input = self._format_decimal(result)
         self.display_var.set(self.current_input)
         self.history_var.set(f"{expression} =")
@@ -246,7 +240,7 @@ class CalculatorApp:
         self.reset_input = True
 
     def _perform_operation(self, left: Decimal | None, right: Decimal, operator: str) -> Decimal | None:
-        # left가 비어 있으면 사실상 계산 없이 right를 그대로 사용합니다.
+        """선택된 연산자에 따라 실제 계산을 수행합니다."""
         if left is None:
             return right
 
@@ -260,16 +254,15 @@ class CalculatorApp:
             if operator == "/":
                 return left / right
         except (DivisionByZero, InvalidOperation):
-            # 0으로 나누기 같은 잘못된 계산은 None으로 알려줍니다.
             return None
         return None
 
     def _update_display(self) -> None:
-        # 현재 입력 문자열을 화면에 반영합니다.
+        """현재 입력 값을 화면에 반영합니다."""
         self.display_var.set(self.current_input)
 
     def _show_error(self) -> None:
-        # 오류가 나면 화면을 Error로 바꾸고 계산 상태를 초기화합니다.
+        """오류가 발생했을 때 화면과 내부 상태를 초기화합니다."""
         self.current_input = "Error"
         self.display_var.set("Error")
         self.history_var.set("")
@@ -279,7 +272,7 @@ class CalculatorApp:
 
     @staticmethod
     def _to_decimal(value: str) -> Decimal | None:
-        # 문자열을 Decimal로 바꾸면 float보다 소수 계산이 더 안정적입니다.
+        """문자열을 Decimal로 바꿔 float보다 안정적으로 계산합니다."""
         try:
             return Decimal(value)
         except InvalidOperation:
@@ -287,7 +280,7 @@ class CalculatorApp:
 
     @staticmethod
     def _format_decimal(value: Decimal) -> str:
-        # 2.5000 -> 2.5, 10.0 -> 10 처럼 보기 좋게 정리합니다.
+        """불필요한 0을 제거해 보기 좋은 숫자 문자열로 바꿉니다."""
         normalized = value.normalize()
         text = format(normalized, "f")
         if "." in text:
@@ -296,14 +289,14 @@ class CalculatorApp:
 
     @staticmethod
     def _symbol(operator: str) -> str:
-        # 필요하면 연산자 표시 문자를 바꿀 때 사용하는 함수입니다.
+        """필요하면 연산자 표시 문자를 바꿔 쓰기 위한 함수입니다."""
         return operator
 
 
 def main() -> None:
-    # tkinter 창을 만들고 계산기 프로그램을 실행합니다.
+    """계산기 프로그램을 시작합니다."""
     root = tk.Tk()
-    app = CalculatorApp(root)
+    CalculatorApp(root)
     root.mainloop()
 
 

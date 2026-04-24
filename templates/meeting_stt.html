@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<!--
+프로그램 흐름 설명
+1. 이 HTML은 STT 화면의 입력창, 버튼, 회의록 영역, 오류 로그 영역을 배치합니다.
+2. JavaScript는 이 화면 요소들을 찾아 실시간 녹음, 파일 업로드, 복사, 저장 기능을 연결합니다.
+3. 회의록 영역에는 전사된 내용만 발화 블록 형태로 누적되고, 오류는 별도 로그 영역에 표시됩니다.
+
+이 화면이 정상 동작하려면 필요한 것
+1. 이 HTML 파일은 단독으로 열어서 쓰는 문서가 아니라 FastAPI 서버가 렌더링하는 템플릿입니다.
+2. 따라서 아래 항목이 먼저 준비되어야 합니다.
+   - src/realtime_stt_app.py 서버 실행
+   - static/meeting_stt.js 파일 로드 성공
+   - static/meeting_stt.css 파일 로드 성공
+   - 브라우저가 WebSocket과 MediaRecorder를 지원할 것
+3. 설치가 필요한 핵심 Python 모듈
+   - fastapi
+   - uvicorn
+   - openai-whisper
+   - jinja2
+   - python-multipart
+   - torch
+4. 별도 외부 도구
+   - ffmpeg
+
+설치 및 실행 순서 요약
+1. 프로젝트 루트에서 가상환경을 활성화합니다.
+2. pip install fastapi uvicorn openai-whisper jinja2 python-multipart torch torchvision torchaudio
+3. ffmpeg를 설치하고 PATH 또는 환경변수로 연결합니다.
+4. python src\realtime_stt_app.py 로 서버를 실행합니다.
+5. 브라우저에서 http://127.0.0.1:8010 을 엽니다.
+-->
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='meeting_stt.css') }}">
+</head>
+<body>
+    <main class="page">
+        <section class="hero">
+            <p class="eyebrow">FastAPI + Whisper + WebSocket</p>
+            <h1>{{ page_title }}</h1>
+            <p class="subtitle">
+                실시간 전사와 파일 일괄 전사를 함께 사용할 수 있으며, 회의록 화면에는 전사된 내용만 발화 단위로 정리해 보여줍니다.
+            </p>
+        </section>
+
+        <section class="panel controls">
+            <div class="field-grid">
+                <label class="field">
+                    <span>언어 코드</span>
+                    <input id="languageInput" type="text" value="ko" placeholder="ko, en, ja">
+                </label>
+
+                <label class="field">
+                    <span>초기 프롬프트</span>
+                    <input id="promptInput" type="text" placeholder="프로젝트명, 참석자 이름, 제품명">
+                </label>
+
+                <label class="field">
+                    <span>Whisper 모델</span>
+                    <select id="modelSelect">
+                        {% for item in supported_models %}
+                        <option value="{{ item }}" {% if item == model_name %}selected{% endif %}>{{ item }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+
+                <label class="field">
+                    <span>실시간 청크 간격(초)</span>
+                    <input id="chunkSecondsInput" type="number" min="1" max="5" step="1" value="1">
+                </label>
+            </div>
+
+            <div class="actions">
+                <button id="startButton" class="primary" type="button">실시간 녹음 시작</button>
+                <button id="stopButton" type="button" disabled>녹음 중지</button>
+                <button id="saveRecordingButton" type="button" disabled>녹음 파일 저장</button>
+                <button id="downloadButton" type="button">텍스트 다운로드</button>
+            </div>
+
+            <div class="status-row">
+                <span id="statusBadge" class="badge idle">대기 중</span>
+                <span id="statusText">WebSocket 연결을 준비하고 있습니다.</span>
+            </div>
+        </section>
+
+        <section class="panel upload-panel">
+            <div class="panel-header">
+                <div>
+                    <h2>녹취 파일 일괄 전사</h2>
+                    <p id="uploadMeta">음성 파일을 선택한 뒤 서버로 전송하면 전사 결과가 회의록 영역에 추가됩니다.</p>
+                </div>
+            </div>
+            <div class="upload-row">
+                <input
+                    id="audioFileInput"
+                    class="file-input"
+                    type="file"
+                    multiple
+                    accept=".mp3,.wav,.m4a,.webm,.mp4,.mpeg,.mpga,.ogg"
+                >
+                <button id="uploadTranscribeButton" type="button">선택 파일 일괄 전사</button>
+            </div>
+        </section>
+
+        <section class="panel transcript-panel">
+            <div class="panel-header">
+                <div>
+                    <h2>실시간 회의록</h2>
+                    <p id="transcriptMeta">전사된 내용만 발화자별 줄바꿈 형식으로 누적됩니다.</p>
+                </div>
+                <div class="panel-actions">
+                    <button id="copyTranscriptButton" type="button">회의록 복사</button>
+                    <button id="clearTranscriptButton" type="button">회의록 지우기</button>
+                </div>
+            </div>
+            <textarea
+                id="transcriptText"
+                class="text-log transcript-text"
+                aria-label="실시간 회의록"
+                readonly
+                placeholder="전사된 텍스트가 여기에 누적됩니다."
+            ></textarea>
+        </section>
+
+        <section id="errorPanel" class="panel error-panel hidden">
+            <div class="panel-header">
+                <div>
+                    <h2>오류 로그</h2>
+                    <p id="errorMeta">오류가 발생하면 상세 정보가 기록됩니다.</p>
+                </div>
+                <div class="panel-actions">
+                    <button id="clearErrorButton" type="button">오류 로그 지우기</button>
+                </div>
+            </div>
+            <textarea
+                id="errorText"
+                class="text-log error-text"
+                aria-label="오류 로그"
+                readonly
+                placeholder="오류 로그가 여기에 표시됩니다."
+            ></textarea>
+        </section>
+    </main>
+
+    <script>
+        window.STT_APP_CONFIG = {
+            websocketUrl: `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/transcribe`,
+            fileTranscribeUrl: `${location.protocol}//${location.host}/api/transcribe-file`
+        };
+    </script>
+    <script src="{{ url_for('static', path='meeting_stt.js') }}" defer></script>
+</body>
+</html>
