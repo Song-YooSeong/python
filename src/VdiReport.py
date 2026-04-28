@@ -35,15 +35,15 @@ import platform
 import re
 from copy import copy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tkinter import PhotoImage, StringVar, Tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Border, Side
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 
 # 현재 실행 중인 운영체제를 한 번만 확인해 두고, 기본 경로/폰트를 정할 때 재사용합니다.
@@ -72,7 +72,6 @@ DEFAULT_UI_FONT = get_default_ui_font()
 DEFAULT_VDI_LOG_PATH = DEFAULT_BASE_DIR / "1.vdilog.xlsx"
 DEFAULT_USER_INFO_PATH = DEFAULT_BASE_DIR / "2.userinfo.xlsx"
 DEFAULT_OUTPUT_DIR = DEFAULT_BASE_DIR
-TEMPLATE_PATH = DEFAULT_BASE_DIR / "3.VdiConnectReport.xlsx"
 
 TITLE_TEXT = "VDI 접속현황"
 WINDOW_TITLE = "VDI 접속 현황"
@@ -122,7 +121,10 @@ REPORT_HEADERS = [
 ]
 
 # 로그 시간은 한국 시간 기준으로 보여주기 위해 KST 타임존을 사용합니다.
-KST = ZoneInfo("Asia/Seoul")
+try:
+    KST = ZoneInfo("Asia/Seoul")
+except ZoneInfoNotFoundError:
+    KST = timezone(timedelta(hours=9), name="KST")
 
 # 로그 본문에서 사번과 IP를 찾기 위한 정규식입니다.
 # EMPLOYEE_PATTERN은 "\+nb12345" 같은 형태에서 숫자 부분을 뽑아 "NB12345"로 맞춥니다.
@@ -487,11 +489,64 @@ def write_report_from_template(template_path: Path, output_path: Path, rows: lis
     workbook.save(output_path)
 
 
+def write_report(output_path: Path, rows: list[ReportRow]) -> None:
+    """Template file 없이 새 Excel 보고서를 만들어 저장합니다."""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "VDI 접속현황"
+    max_col = len(REPORT_HEADERS)
+
+    title_fill = PatternFill(fill_type="solid", fgColor="12304A")
+    header_fill = PatternFill(fill_type="solid", fgColor="E7EEF6")
+    even_fill = PatternFill(fill_type="solid", fgColor="F7FAFD")
+    empty_fill = PatternFill(fill_type=None)
+    title_font = Font(name=DEFAULT_UI_FONT, size=16, bold=True, color="FFFFFF")
+    header_font = Font(name=DEFAULT_UI_FONT, size=10, bold=True, color="1D2B3A")
+    body_font = Font(name=DEFAULT_UI_FONT, size=10, color="1D2B3A")
+
+    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
+    title_cell = sheet.cell(row=1, column=1, value=TITLE_TEXT)
+    title_cell.fill = title_fill
+    title_cell.font = title_font
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 28
+
+    for column_index, header in enumerate(REPORT_HEADERS, start=1):
+        cell = sheet.cell(row=2, column=column_index, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = SOLID_BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[2].height = 24
+
+    for index, row in enumerate(rows, start=1):
+        target_row = index + 2
+        fill = even_fill if index % 2 == 0 else empty_fill
+        for column_index, value in enumerate(row.as_excel_row(index), start=1):
+            cell = sheet.cell(row=target_row, column=column_index, value=value)
+            cell.font = body_font
+            cell.fill = fill
+            cell.border = SOLID_BORDER
+
+    if rows:
+        apply_data_alignment(sheet, 3, len(rows) + 2, max_col)
+
+    column_widths = [8, 20, 16, 14, 14, 14, 28, 16, 16, 32]
+    for column_index, width in enumerate(column_widths, start=1):
+        column_letter = sheet.cell(row=2, column=column_index).column_letter
+        sheet.column_dimensions[column_letter].width = width
+
+    sheet.freeze_panes = "A3"
+    last_row = max(len(rows) + 2, 2)
+    sheet.auto_filter.ref = f"A2:{sheet.cell(row=last_row, column=max_col).coordinate}"
+    workbook.save(output_path)
+
+
 def validate_required_files(log_path: Path, user_info_path: Path) -> None:
-    """보고서 생성에 필요한 입력 파일과 템플릿 파일이 모두 있는지 확인합니다."""
+    """보고서 생성에 필요한 입력 파일이 모두 있는지 확인합니다."""
     # 미리보기를 만들거나 저장하기 전에 파일 존재 여부를 먼저 확인하면,
     # openpyxl에서 발생하는 복잡한 오류 대신 사용자에게 이해하기 쉬운 메시지를 보여줄 수 있습니다.
-    required_files = (log_path, user_info_path, TEMPLATE_PATH)
+    required_files = (log_path, user_info_path)
     missing_files = [str(path) for path in required_files if not path.exists()]
     if missing_files:
         raise FileNotFoundError(f"입력 파일을 찾을 수 없습니다: {', '.join(missing_files)}")
@@ -1048,7 +1103,7 @@ class VdiWindow:
                     return
 
             output_path = self.build_output_path()
-            write_report_from_template(TEMPLATE_PATH, output_path, self.preview_rows)
+            write_report(output_path, self.preview_rows)
             messagebox.showinfo("완료", f"보고서가 저장되었습니다.\n{output_path}")
             self.status_var.set(f"파일 저장 완료: {output_path}")
         except Exception as exc:
