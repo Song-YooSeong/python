@@ -1,20 +1,19 @@
-"""VDI 접속 로그를 읽어 Excel 보고서를 만드는 데스크톱 GUI 프로그램입니다.
+"""VDI 접속 로그와 사용자정보 Excel을 합쳐 보고서 Excel을 만드는 GUI 프로그램입니다.
 
-이 프로그램이 하는 일
+초보자를 위한 프로그램 흐름
 1. 사용자가 VDI 로그 Excel 파일(기본값: C:/VDI/1.vdilog.xlsx)을 선택합니다.
 2. 사용자가 사용자정보 Excel 파일(기본값: C:/VDI/2.userinfo.xlsx)을 선택합니다.
-3. 프로그램은 VDI 로그의 body 컬럼에서 사번과 접속 단말 IP를 찾아냅니다.
-4. 프로그램은 사용자정보 파일에서 같은 사번을 찾아 이름, 이메일, 전화번호, 확인담당자 등을 붙입니다.
-5. 합쳐진 결과를 화면 표(Treeview)에 미리 보여 줍니다.
+3. [미리보기 생성] 버튼을 누르면 로그 파일을 읽고, 각 로그의 body 컬럼에서 사번과 접속 단말 IP를 찾습니다.
+4. 찾은 사번으로 사용자정보 파일을 조회해 역할, 이름, 이메일, 전화번호, 확인담당자를 붙입니다.
+5. 합쳐진 결과를 화면 표(Treeview)에 표시합니다.
 6. 사용자는 미리보기 표의 마지막 열인 "접속사유"를 직접 입력하거나 수정할 수 있습니다.
-7. 저장 버튼을 누르면 템플릿 Excel 파일(기본값: C:/VDI/3.VdiConnectReport.xlsx)에 데이터를 채워
-   새 보고서 파일로 저장합니다.
+7. [파일 저장] 버튼을 누르면 템플릿 파일 없이 새 Excel 파일을 만들고, 미리보기 데이터를 그대로 저장합니다.
 
-초보자를 위한 큰 흐름
+소스 코드가 나뉘어 있는 방식
 - "상수 영역": 기본 파일 경로, 보고서 헤더, 색상, 정규식처럼 프로그램 전체에서 쓰는 값을 모아 둡니다.
-- "데이터 자료형": UserInfo, ReportRow처럼 한 사람/한 행의 데이터를 담는 작은 상자를 정의합니다.
-- "데이터 처리 함수": Excel 읽기, 사번/IP 추출, 시간 변환, 보고서 행 만들기를 담당합니다.
-- "Excel 저장 함수": 템플릿 파일을 열고, 행 서식을 복사하고, 테두리/정렬을 적용한 뒤 저장합니다.
+- "데이터 자료형": UserInfo, ReportRow처럼 한 사람/한 보고서 행의 데이터를 담는 작은 상자를 정의합니다.
+- "데이터 처리 함수": Excel 읽기, 사번/IP 추출, 시간 변환, 로그와 사용자정보 합치기를 담당합니다.
+- "Excel 저장 함수": 새 Excel 파일을 만들고 제목, 헤더, 데이터, 서식, 필터를 직접 적용한 뒤 저장합니다.
 - "VdiWindow 클래스": Tkinter 화면을 만들고 버튼 클릭, 표 정렬, 접속사유 편집 같은 사용자 동작을 처리합니다.
 - "main 함수": Tkinter 창을 띄우고 프로그램 이벤트 루프를 시작합니다.
 
@@ -25,7 +24,7 @@
 
 주의할 점
 - 이 파일은 GUI 프로그램이므로 main()을 실행하면 Tkinter 창이 열립니다.
-- openpyxl은 Excel 파일을 읽고 쓰는 라이브러리이며, Excel 프로그램 자체를 실행하지는 않습니다.
+- openpyxl은 Excel 파일을 읽고 쓰는 라이브러리이며, PC에 설치된 Excel 프로그램을 직접 실행하지는 않습니다.
 - 사번과 IP는 로그 본문 텍스트에서 정규식으로 찾기 때문에 로그 형식이 크게 바뀌면 정규식을 수정해야 합니다.
 """
 
@@ -33,7 +32,6 @@ from __future__ import annotations
 
 import platform
 import re
-from copy import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -121,6 +119,8 @@ REPORT_HEADERS = [
 ]
 
 # 로그 시간은 한국 시간 기준으로 보여주기 위해 KST 타임존을 사용합니다.
+# Windows 환경에 tzdata 패키지가 없으면 ZoneInfo("Asia/Seoul")이 실패할 수 있습니다.
+# 그 경우에도 프로그램이 멈추지 않도록 UTC+9 고정 시간대를 대신 사용합니다.
 try:
     KST = ZoneInfo("Asia/Seoul")
 except ZoneInfoNotFoundError:
@@ -301,6 +301,8 @@ def load_log_rows(path: Path) -> list[dict[str, Any]]:
     data_rows: list[dict[str, Any]] = []
 
     # 첫 행은 헤더이므로 두 번째 행부터 실제 데이터로 처리합니다.
+    # 예를 들어 Excel의 첫 행이 ["logtime", "body"]이고 두 번째 행이 실제 로그라면,
+    # 아래 반복문은 {"logtime": 로그시간값, "body": 로그본문값} 같은 딕셔너리를 만듭니다.
     for row in rows[1:]:
         if all(value_to_text(cell) == "" for cell in row):
             continue
@@ -325,6 +327,8 @@ def load_user_info(path: Path) -> dict[str, UserInfo]:
     users: dict[str, UserInfo] = {}
 
     # 사용자정보 파일은 1~2행이 제목/헤더라고 보고, 3행부터 실제 사용자 데이터로 읽습니다.
+    # 열 위치는 고정으로 가정합니다.
+    # B열=역할, C열=이름, D열=사번, E열=전화번호, F열=이메일, G열=확인담당자
     for row_index in range(3, sheet.max_row + 1):
         role = value_to_text(sheet.cell(row=row_index, column=2).value)
         name = value_to_text(sheet.cell(row=row_index, column=3).value)
@@ -353,6 +357,12 @@ def build_report_rows(log_path: Path, users: dict[str, UserInfo]) -> list[Report
     """로그와 사용자 정보를 합쳐 최종 보고서에 들어갈 행 목록을 만듭니다."""
     # 이 함수가 실제 "보고서 데이터 만들기"의 중심입니다.
     # 로그 한 줄을 읽고 -> body에서 사번/IP를 찾고 -> 사용자정보와 합쳐 -> ReportRow로 저장합니다.
+    #
+    # 초보자용으로 아주 단순하게 말하면:
+    # - load_log_rows(): 로그 Excel을 한 줄씩 읽습니다.
+    # - extract_employee_no(): 로그 본문에서 사번을 찾습니다.
+    # - users.get(): 사번으로 사용자정보를 찾습니다.
+    # - ReportRow(): 보고서 한 줄을 만듭니다.
     report_rows: list[ReportRow] = []
 
     for row in load_log_rows(log_path):
@@ -391,40 +401,6 @@ def build_report_rows(log_path: Path, users: dict[str, UserInfo]) -> list[Report
     return report_rows
 
 
-def clear_existing_data_rows(worksheet: Any) -> None:
-    """템플릿에 남아 있을 수 있는 기존 데이터 행을 지웁니다."""
-    if worksheet.max_row > 2:
-        worksheet.delete_rows(3, worksheet.max_row - 2)
-
-
-def copy_row_style(worksheet: Any, target_row: int, style_row: int, max_col: int) -> None:
-    """템플릿의 예시 행 서식을 새 데이터 행에 복사합니다."""
-    # 보고서 템플릿에는 보통 글꼴, 배경색, 테두리, 정렬 같은 서식이 미리 들어 있습니다.
-    # 새 행에 값만 넣으면 서식이 깨질 수 있으므로, style_row의 서식을 target_row에 복사합니다.
-    source_height = worksheet.row_dimensions[style_row].height
-    if source_height is not None:
-        worksheet.row_dimensions[target_row].height = source_height
-
-    for column_index in range(1, max_col + 1):
-        source_cell = worksheet.cell(row=style_row, column=column_index)
-        target_cell = worksheet.cell(row=target_row, column=column_index)
-        target_cell._style = copy(source_cell._style)
-        if source_cell.has_style:
-            target_cell.font = copy(source_cell.font)
-            target_cell.fill = copy(source_cell.fill)
-            target_cell.border = copy(source_cell.border)
-            target_cell.alignment = copy(source_cell.alignment)
-            target_cell.protection = copy(source_cell.protection)
-            target_cell.number_format = source_cell.number_format
-
-
-def apply_solid_border_to_data_area(worksheet: Any, start_row: int, end_row: int, max_col: int) -> None:
-    """보고서 데이터 영역 전체에 얇은 검은색 테두리를 적용합니다."""
-    for row_index in range(start_row, end_row + 1):
-        for column_index in range(1, max_col + 1):
-            worksheet.cell(row=row_index, column=column_index).border = SOLID_BORDER
-
-
 def apply_data_alignment(worksheet: Any, start_row: int, end_row: int, max_col: int) -> None:
     """보고서 데이터 영역의 셀 정렬을 열 성격에 맞게 조정합니다."""
     for row_index in range(start_row, end_row + 1):
@@ -453,49 +429,20 @@ def apply_data_alignment(worksheet: Any, start_row: int, end_row: int, max_col: 
             )
 
 
-def write_report_from_template(template_path: Path, output_path: Path, rows: list[ReportRow]) -> None:
-    """템플릿 Excel 파일을 열어 보고서 데이터를 채운 뒤 새 파일로 저장합니다."""
-    # 저장 흐름:
-    # 1. 템플릿 파일을 엽니다.
-    # 2. 예전에 남아 있던 데이터 행을 지웁니다.
-    # 3. 제목/헤더를 다시 씁니다.
-    # 4. rows 데이터를 3행부터 차례대로 씁니다.
-    # 5. 테두리/정렬을 적용하고 output_path에 저장합니다.
-    workbook = load_workbook(template_path)
-    sheet = workbook.active
-    max_col = len(REPORT_HEADERS)
-
-    # 3행이 있으면 데이터 예시 행으로 보고 서식을 복사하고, 없으면 헤더 행 서식을 사용합니다.
-    style_row = 3 if sheet.max_row >= 3 else 2
-
-    clear_existing_data_rows(sheet)
-
-    # 제목과 헤더는 항상 코드에 정의된 값으로 다시 써서 템플릿과 미리보기를 맞춥니다.
-    sheet.cell(row=1, column=1, value=TITLE_TEXT)
-    for column_index, header in enumerate(REPORT_HEADERS, start=1):
-        sheet.cell(row=2, column=column_index, value=header)
-
-    # Excel에서 1~2행은 제목/헤더라서 실제 데이터는 3행부터 씁니다.
-    for index, row in enumerate(rows, start=1):
-        target_row = index + 2
-        copy_row_style(sheet, target_row, style_row, max_col)
-        for column_index, value in enumerate(row.as_excel_row(index), start=1):
-            sheet.cell(row=target_row, column=column_index, value=value)
-
-    if rows:
-        apply_solid_border_to_data_area(sheet, 3, len(rows) + 2, max_col)
-        apply_data_alignment(sheet, 3, len(rows) + 2, max_col)
-
-    workbook.save(output_path)
-
-
 def write_report(output_path: Path, rows: list[ReportRow]) -> None:
-    """Template file 없이 새 Excel 보고서를 만들어 저장합니다."""
+    """템플릿 파일 없이 새 Excel 보고서를 만들어 저장합니다."""
+    # 저장 흐름:
+    # 1. Workbook()으로 빈 Excel 파일을 새로 만듭니다.
+    # 2. 1행에는 보고서 제목을 넣고, 2행에는 헤더를 넣습니다.
+    # 3. 3행부터 미리보기 데이터(rows)를 차례대로 씁니다.
+    # 4. 글꼴, 배경색, 테두리, 정렬, 열 너비, 필터를 적용합니다.
+    # 5. output_path 위치에 .xlsx 파일로 저장합니다.
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "VDI 접속현황"
     max_col = len(REPORT_HEADERS)
 
+    # openpyxl의 스타일 객체를 미리 만들어 두면 같은 서식을 여러 셀에 반복 적용하기 쉽습니다.
     title_fill = PatternFill(fill_type="solid", fgColor="12304A")
     header_fill = PatternFill(fill_type="solid", fgColor="E7EEF6")
     even_fill = PatternFill(fill_type="solid", fgColor="F7FAFD")
@@ -504,6 +451,7 @@ def write_report(output_path: Path, rows: list[ReportRow]) -> None:
     header_font = Font(name=DEFAULT_UI_FONT, size=10, bold=True, color="1D2B3A")
     body_font = Font(name=DEFAULT_UI_FONT, size=10, color="1D2B3A")
 
+    # 1행 전체를 하나로 합쳐 제목이 표 위에 크게 보이도록 합니다.
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
     title_cell = sheet.cell(row=1, column=1, value=TITLE_TEXT)
     title_cell.fill = title_fill
@@ -511,6 +459,7 @@ def write_report(output_path: Path, rows: list[ReportRow]) -> None:
     title_cell.alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[1].height = 28
 
+    # 2행은 보고서의 열 제목입니다. REPORT_HEADERS와 미리보기 표의 헤더가 같은 값을 사용합니다.
     for column_index, header in enumerate(REPORT_HEADERS, start=1):
         cell = sheet.cell(row=2, column=column_index, value=header)
         cell.fill = header_fill
@@ -519,6 +468,7 @@ def write_report(output_path: Path, rows: list[ReportRow]) -> None:
         cell.alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[2].height = 24
 
+    # 실제 데이터는 3행부터 씁니다. enumerate(..., start=1)의 index는 보고서의 No 값으로도 사용합니다.
     for index, row in enumerate(rows, start=1):
         target_row = index + 2
         fill = even_fill if index % 2 == 0 else empty_fill
@@ -531,11 +481,14 @@ def write_report(output_path: Path, rows: list[ReportRow]) -> None:
     if rows:
         apply_data_alignment(sheet, 3, len(rows) + 2, max_col)
 
+    # 열 너비를 고정해 두면 보고서를 열었을 때 바로 읽기 편합니다.
     column_widths = [8, 20, 16, 14, 14, 14, 28, 16, 16, 32]
     for column_index, width in enumerate(column_widths, start=1):
         column_letter = sheet.cell(row=2, column=column_index).column_letter
         sheet.column_dimensions[column_letter].width = width
 
+    # A3에서 틀 고정을 하면 제목/헤더는 고정되고 데이터만 스크롤됩니다.
+    # auto_filter는 Excel에서 헤더 필터 드롭다운을 사용할 수 있게 합니다.
     sheet.freeze_panes = "A3"
     last_row = max(len(rows) + 2, 2)
     sheet.auto_filter.ref = f"A2:{sheet.cell(row=last_row, column=max_col).coordinate}"
@@ -952,6 +905,8 @@ class VdiWindow:
 
             # 사용자정보를 먼저 사전(dict)으로 읽어 둡니다.
             # 그다음 로그를 읽으면서 사번별 사용자정보를 빠르게 붙입니다.
+            # 결과는 ReportRow 객체 목록으로 self.preview_rows에 보관합니다.
+            # self.preview_rows는 이후 표 정렬, 접속사유 수정, 파일 저장에서 계속 재사용됩니다.
             users = load_user_info(user_info_path)
             self.preview_rows = build_report_rows(log_path, users)
 
@@ -974,6 +929,8 @@ class VdiWindow:
         for row_index, row in enumerate(self.preview_rows, start=1):
             values = row.as_excel_row(row_index)
             row_tag = "even" if row_index % 2 == 0 else "odd"
+            # iid에는 0부터 시작하는 문자열 번호를 넣습니다.
+            # 나중에 셀을 클릭했을 때 iid를 int로 바꾸면 preview_rows의 인덱스로 바로 사용할 수 있습니다.
             self.tree.insert("", "end", iid=str(row_index - 1), values=values, tags=(row_tag,))
 
     def handle_tree_click(self, event: Any) -> None:
@@ -1047,6 +1004,7 @@ class VdiWindow:
         reverse = self.sort_reverse.get(self.columns[column_index], False)
 
         # 열마다 데이터 성격이 다르므로 날짜/IP/문자열에 맞는 기준으로 정렬합니다.
+        # 예: 날짜는 datetime 그대로 비교하고, IP는 "10.2.3.4"를 (10, 2, 3, 4) 튜플로 바꿔 비교합니다.
         if column_index == 0:
             self.preview_rows.reverse()
         elif column_index == 1:
@@ -1091,18 +1049,20 @@ class VdiWindow:
         return output_dir / f"{OUTPUT_FILENAME_PREFIX}_{timestamp}{suffix}"
 
     def save_report(self) -> None:
-        """미리보기 데이터를 템플릿에 써서 최종 Excel 보고서로 저장합니다."""
+        """미리보기 데이터를 새 Excel 파일로 저장합니다."""
         try:
             # 저장 직전에 편집 중인 접속사유가 있다면 먼저 반영합니다.
             self.close_reason_editor(save=True)
 
             # 사용자가 미리보기를 만들지 않고 저장을 눌렀다면 먼저 미리보기를 자동 생성합니다.
+            # 자동 생성 후에도 데이터가 없다면 저장할 내용이 없으므로 그대로 종료합니다.
             if not self.preview_rows:
                 self.generate_preview()
                 if not self.preview_rows:
                     return
 
             output_path = self.build_output_path()
+            # write_report는 템플릿 파일을 읽지 않고, output_path에 새 .xlsx 파일을 직접 만듭니다.
             write_report(output_path, self.preview_rows)
             messagebox.showinfo("완료", f"보고서가 저장되었습니다.\n{output_path}")
             self.status_var.set(f"파일 저장 완료: {output_path}")
