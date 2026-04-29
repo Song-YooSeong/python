@@ -1,0 +1,229 @@
+/*
+    대시보드 스타일.
+
+    이 CSS는 운영용 관제 화면처럼 정보가 빠르게 읽히도록 구성했습니다.
+    카드형 요약은 핵심 수치만 보여주고, 상세 내용은 표와 목록에 배치합니다.
+*/
+
+:root {
+    --bg: #eef3f8;
+    --panel: #ffffff;
+    --ink: #1d2b3a;
+    --muted: #637386;
+    --line: #d8e1eb;
+    --navy: #12304a;
+    --blue: #1f6feb;
+    --warning: #b7791f;
+    --critical: #c53030;
+    --ok: #2f855a;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;
+}
+
+.topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 22px 28px;
+    background: var(--navy);
+    color: #fff;
+}
+
+.topbar h1 {
+    margin: 0;
+    font-size: 24px;
+}
+
+.topbar p {
+    margin: 8px 0 0;
+    color: #c8d7ea;
+}
+
+button {
+    border: 0;
+    border-radius: 6px;
+    padding: 10px 14px;
+    background: var(--blue);
+    color: #fff;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+main {
+    padding: 18px;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.summary-card,
+.panel {
+    border: 1px solid var(--line);
+    background: var(--panel);
+}
+
+.summary-card {
+    padding: 18px;
+}
+
+.summary-card .label {
+    display: block;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.summary-card strong {
+    display: block;
+    margin-top: 8px;
+    font-size: 30px;
+}
+
+.summary-card.critical strong {
+    color: var(--critical);
+}
+
+.content-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 14px;
+}
+
+.panel {
+    min-height: 260px;
+}
+
+.panel.wide {
+    grid-column: 1 / -1;
+}
+
+.panel-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+}
+
+.panel-header h2 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+    font-size: 14px;
+}
+
+th {
+    background: #e7eef6;
+    font-weight: 700;
+}
+
+.badge {
+    display: inline-block;
+    min-width: 72px;
+    border-radius: 999px;
+    padding: 4px 9px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.badge.info {
+    background: #e6f4ea;
+    color: var(--ok);
+}
+
+.badge.warning {
+    background: #fff4db;
+    color: var(--warning);
+}
+
+.badge.critical {
+    background: #fde2e2;
+    color: var(--critical);
+}
+
+.risk-list,
+.log-list,
+.guide-box {
+    padding: 14px 16px;
+}
+
+.risk-item {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.risk-item strong {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.risk-meter {
+    height: 8px;
+    margin-top: 9px;
+    background: #edf2f7;
+}
+
+.risk-meter span {
+    display: block;
+    height: 100%;
+    background: var(--blue);
+}
+
+.log-line {
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+}
+
+.guide-box h3 {
+    margin-top: 0;
+}
+
+.guide-box ul,
+.guide-box ol {
+    padding-left: 22px;
+}
+
+.muted {
+    color: var(--muted);
+}
+
+@media (max-width: 900px) {
+    .summary-grid,
+    .content-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .panel.wide {
+        grid-column: auto;
+    }
+}

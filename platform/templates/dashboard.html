@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Infra Monitoring Platform</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+    <!--
+        이 화면은 FastAPI가 제공하는 간단한 Custom Dashboard입니다.
+        실제 운영에서는 Grafana/React/Next.js 같은 도구를 붙일 수 있지만,
+        MVP에서는 구조를 쉽게 보기 위해 순수 HTML/CSS/JS로 만들었습니다.
+    -->
+    <header class="topbar">
+        <div>
+            <h1>AI Infra Monitoring Platform</h1>
+            <p>통합 모니터링, 알림, 장애 예측, 조치 가이드 MVP</p>
+        </div>
+        <button id="refreshButton" type="button">새로고침</button>
+    </header>
+
+    <main>
+        <section class="summary-grid" aria-label="상태 요약">
+            <article class="summary-card">
+                <span class="label">자산</span>
+                <strong id="resourceCount">0</strong>
+            </article>
+            <article class="summary-card">
+                <span class="label">열린 알림</span>
+                <strong id="openAlertCount">0</strong>
+            </article>
+            <article class="summary-card critical">
+                <span class="label">Critical</span>
+                <strong id="criticalAlertCount">0</strong>
+            </article>
+            <article class="summary-card">
+                <span class="label">평균 위험도</span>
+                <strong id="averageRiskScore">0</strong>
+            </article>
+        </section>
+
+        <section class="content-grid">
+            <article class="panel">
+                <div class="panel-header">
+                    <h2>자산 목록</h2>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>유형</th>
+                                <th>서비스</th>
+                                <th>IP</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resourceRows"></tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article class="panel">
+                <div class="panel-header">
+                    <h2>위험 자산 Top 5</h2>
+                </div>
+                <div id="riskList" class="risk-list"></div>
+            </article>
+
+            <article class="panel wide">
+                <div class="panel-header">
+                    <h2>최근 알림</h2>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>심각도</th>
+                                <th>자산</th>
+                                <th>지표</th>
+                                <th>메시지</th>
+                                <th>가이드</th>
+                            </tr>
+                        </thead>
+                        <tbody id="alertRows"></tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article class="panel">
+                <div class="panel-header">
+                    <h2>최근 로그</h2>
+                </div>
+                <div id="logList" class="log-list"></div>
+            </article>
+
+            <article class="panel">
+                <div class="panel-header">
+                    <h2>조치 가이드</h2>
+                </div>
+                <div id="guideBox" class="guide-box">
+                    알림의 가이드 버튼을 누르면 권장 확인 명령어와 조치 절차가 표시됩니다.
+                </div>
+            </article>
+        </section>
+    </main>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>
