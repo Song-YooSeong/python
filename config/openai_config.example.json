@@ -1,0 +1,6 @@
+{
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "summary_model": "gpt-5.2",
+    "transcription_model": "gpt-4o-mini-transcribe",
+    "meeting_language": "ko"
+}

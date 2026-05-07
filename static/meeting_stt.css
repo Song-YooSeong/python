@@ -1,13 +1,17 @@
+/* --------------------------------------------------------------------------
+   전체 화면에서 공통으로 쓰는 색상과 기본 스타일입니다.
+   CSS 변수(--bg, --panel 등)를 사용하면 같은 색을 여러 곳에서 재사용하기 쉽습니다.
+-------------------------------------------------------------------------- */
 :root {
-    --bg: #f2efe8;
-    --panel: rgba(255, 252, 246, 0.96);
-    --ink: #1f2a2e;
-    --muted: #5d6a6f;
-    --line: #d7cfbe;
-    --accent: #0c7c59;
-    --accent-dark: #085b41;
-    --warning: #a63d40;
-    --shadow: 0 24px 60px rgba(35, 34, 28, 0.12);
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #1d2730;
+    --muted: #62707f;
+    --line: #d9e0e7;
+    --accent: #0d766f;
+    --accent-dark: #0b5f59;
+    --warning: #b42318;
+    --shadow: 0 10px 30px rgba(29, 39, 48, 0.08);
 }
 
 * {
@@ -19,11 +23,10 @@ body {
     min-height: 100vh;
     font-family: "Segoe UI", "Malgun Gothic", sans-serif;
     color: var(--ink);
-    background:
-        radial-gradient(circle at top left, rgba(12, 124, 89, 0.16), transparent 25%),
-        linear-gradient(135deg, #f7f2e8 0%, #ece6d7 100%);
+    background: var(--bg);
 }
 
+/* main.page는 화면 전체 내용의 최대 폭과 여백을 담당합니다. */
 .page {
     max-width: 1080px;
     margin: 0 auto;
@@ -56,12 +59,12 @@ body {
     line-height: 1.65;
 }
 
+/* panel은 입력 영역, 업로드 영역, 결과 영역에 공통으로 쓰는 흰색 박스입니다. */
 .panel {
     background: var(--panel);
-    border: 1px solid rgba(215, 207, 190, 0.85);
-    border-radius: 24px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
     box-shadow: var(--shadow);
-    backdrop-filter: blur(10px);
 }
 
 .hidden {
@@ -76,11 +79,16 @@ body {
     margin-bottom: 20px;
 }
 
+/* 입력칸은 화면 폭에 따라 자동으로 1열 또는 여러 열로 배치됩니다. */
 .field-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 14px;
     margin-bottom: 18px;
+}
+
+.field.wide {
+    grid-column: span 2;
 }
 
 .field,
@@ -101,9 +109,9 @@ body {
 .readonly strong {
     min-height: 48px;
     padding: 12px 14px;
-    border-radius: 14px;
+    border-radius: 8px;
     border: 1px solid var(--line);
-    background: #fffdfa;
+    background: #fff;
     font: inherit;
 }
 
@@ -123,9 +131,9 @@ body {
     flex: 1 1 320px;
     min-height: 48px;
     padding: 10px 14px;
-    border-radius: 14px;
+    border-radius: 8px;
     border: 1px solid var(--line);
-    background: #fffdfa;
+    background: #fff;
     font: inherit;
 }
 
@@ -142,12 +150,12 @@ body {
 
 button {
     border: 0;
-    border-radius: 999px;
+    border-radius: 8px;
     padding: 13px 20px;
     font: inherit;
     font-weight: 700;
     cursor: pointer;
-    background: #e5ddd0;
+    background: #e8edf2;
     color: var(--ink);
 }
 
@@ -172,15 +180,16 @@ button:disabled {
     flex-wrap: wrap;
 }
 
+/* JavaScript의 setStatus()가 idle/recording/sending/error class를 바꿔 색상을 제어합니다. */
 .badge {
     padding: 8px 12px;
-    border-radius: 999px;
+    border-radius: 8px;
     font-size: 0.9rem;
     font-weight: 700;
 }
 
 .badge.idle {
-    background: #e7e0d3;
+    background: #e8edf2;
 }
 
 .badge.recording {
@@ -189,8 +198,8 @@ button:disabled {
 }
 
 .badge.sending {
-    background: #fff0c8;
-    color: #7d5b00;
+    background: #e0f2fe;
+    color: #075985;
 }
 
 .badge.error {
@@ -216,12 +225,22 @@ button:disabled {
     color: var(--muted);
 }
 
+.model-note {
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin-top: 18px;
+    padding-top: 14px;
+    word-break: break-all;
+}
+
+/* textarea는 OpenAI 결과처럼 줄바꿈이 많은 텍스트를 편하게 읽기 위한 영역입니다. */
 .text-log {
     width: 100%;
     min-height: 260px;
     padding: 18px;
-    border-radius: 18px;
-    border: 1px solid #e3dacb;
+    border-radius: 8px;
+    border: 1px solid var(--line);
     background: #fff;
     color: var(--ink);
     resize: vertical;
@@ -241,6 +260,7 @@ button:disabled {
     color: #6d2b2e;
 }
 
+/* 모바일 화면에서는 패널 여백을 줄이고, 넓은 입력칸도 한 줄 폭으로 내려줍니다. */
 @media (max-width: 720px) {
     .page {
         padding: 24px 14px 40px;
@@ -255,5 +275,9 @@ button:disabled {
 
     .panel-header {
         flex-direction: column;
+    }
+
+    .field.wide {
+        grid-column: auto;
     }
 }

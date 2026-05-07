@@ -1,141 +1,78 @@
-"""
-프로그램 흐름 설명
-1. 사용자가 브라우저에서 이 페이지를 열면 FastAPI가 HTML, CSS, JavaScript를 내려줍니다.
-2. 브라우저는 WebSocket으로 서버에 연결하고, 언어/프롬프트/Whisper 모델 설정을 보냅니다.
-3. 실시간 녹음을 시작하면 브라우저는 짧은 음성 청크를 서버로 보내고,
-   서버는 Whisper로 전사한 뒤 결과를 다시 브라우저로 돌려줍니다.
-4. 사용자가 음성 파일을 업로드하면 서버는 임시 파일로 저장한 뒤 Whisper로 전사하고,
-   전사 결과를 JSON으로 반환합니다.
-5. 프로그램은 오류가 나면 로그 파일에 자세한 내용을 남겨서 초보자도 원인을 추적할 수 있게 돕습니다.
+"""회의 녹음 파일을 전사(STT)하고 회의자료로 요약하는 FastAPI 프로그램.
 
-정상 동작에 필요한 설치 항목
-1. Python
-   - 권장: Python 3.10 ~ 3.12
-   - 현재 코드 구조상 Windows에서도 동작하도록 작성되어 있습니다.
-2. Python 모듈
-   - fastapi: 웹 서버와 API 라우팅
-   - uvicorn: FastAPI 실행 서버
-   - openai-whisper: 음성 전사 처리
-   - jinja2: HTML 템플릿 렌더링
-   - python-multipart: 업로드 파일 처리
-   - torch: Whisper가 내부적으로 사용하는 딥러닝 엔진
-3. 외부 프로그램
-   - ffmpeg: mp3, webm, wav 같은 음성 파일을 Whisper가 읽을 수 있게 변환
-4. 브라우저
-   - 마이크 권한과 MediaRecorder를 지원하는 최신 Chrome / Edge 권장
+처리 흐름을 한눈에 보면 다음 순서로 움직입니다.
 
-설치 방법 예시
-1. 가상환경 생성
-   - python -m venv venv
-2. 가상환경 활성화
-   - Windows PowerShell: .\venv\Scripts\Activate.ps1
-3. pip 업그레이드
-   - python -m pip install --upgrade pip
-4. Python 모듈 설치
-   - pip install fastapi uvicorn openai-whisper jinja2 python-multipart
-5. torch 설치
-   - CPU 기준 예시: pip install torch torchvision torchaudio
-   - GPU 환경이면 PyTorch 공식 사이트의 설치 명령을 사용하는 편이 안전합니다.
-6. ffmpeg 설치
-   - ffmpeg.exe가 PATH에 잡히도록 설치하거나
-   - FFMPEG_PATH, FFMPEG_EXE, FFMPEG_BIN_DIR 환경변수로 경로를 지정할 수 있습니다.
+1. 사용자가 브라우저에서 `http://127.0.0.1:8010/`에 접속합니다.
+2. FastAPI가 `templates/meeting_stt.html` 화면을 내려줍니다.
+3. 화면의 JavaScript(`static/meeting_stt.js`)가 마이크 녹음 또는 파일 선택을 처리합니다.
+4. 사용자가 "회의자료 요약 생성" 버튼을 누르면 `/api/summarize-recording`으로 음성 파일이 업로드됩니다.
+5. 서버는 업로드 파일을 임시 파일로 저장하고, OpenAI Audio Transcriptions API로 전사합니다.
+6. 전사된 텍스트를 OpenAI Responses API에 보내 회의 요약, 결정 사항, Action Item 등을 만듭니다.
+7. 서버가 JSON으로 전사문과 요약문을 돌려주면 화면이 결과 영역에 표시합니다.
 
-기동 방법 예시
-1. 프로젝트 루트로 이동
-   - cd c:\study\python
-2. 가상환경 활성화
-   - .\venv\Scripts\Activate.ps1
-3. 서버 실행
-   - python src\realtime_stt_app.py
-   - 또는 uvicorn realtime_stt_app:app --host 127.0.0.1 --port 8010 --reload
-4. 브라우저 접속
-   - http://127.0.0.1:8010
-
-문제 발생 시 확인할 것
-1. ffmpeg가 없으면 Whisper가 오디오 파일을 읽지 못합니다.
-2. python-multipart가 없으면 파일 업로드 API가 실패할 수 있습니다.
-3. torch 또는 whisper 설치가 잘못되면 모델 로딩 단계에서 오류가 납니다.
-4. 오류 상세 내용은 logs/realtime_stt_app_error.log 파일에 기록됩니다.
-
-추가로 조절할 수 있는 서버 설정값
-1. MAX_CONCURRENT_WS_CLIENTS
-   - 동시에 접속할 수 있는 WebSocket 사용자 수
-   - 예: 5
-2. WEBSOCKET_RECEIVE_TIMEOUT_SECONDS
-   - 이 시간 동안 클라이언트 메시지가 없으면 서버가 연결을 종료합니다.
-   - 예: 120
-3. UVICORN_WS_PING_INTERVAL_SECONDS
-   - uvicorn이 ping 프레임을 보내는 간격
-4. UVICORN_WS_PING_TIMEOUT_SECONDS
-   - ping 응답을 기다리는 제한 시간
+기동 순서는 파일 맨 아래의 `if __name__ == "__main__": main()`에서 시작됩니다.
+`main()`은 uvicorn 서버를 실행하고, uvicorn은 이 파일의 `app` 객체(FastAPI 앱)를 찾아
+HTTP 요청을 받을 준비를 합니다.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import os
-import shutil
 import tempfile
-import time
 import traceback
 from pathlib import Path
-from threading import Lock, RLock
 from typing import Any
 
-import whisper
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from openai import OpenAI
 
+# ---------------------------------------------------------------------------
+# 경로와 기본 설정
+# ---------------------------------------------------------------------------
+# __file__은 현재 파일(src/realtime_stt_app.py)의 위치입니다.
+# parent.parent를 사용해 프로젝트 루트(c:\study\python)를 기준 경로로 잡습니다.
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 LOG_DIR = BASE_DIR / "logs"
-LOG_FILE_PATH = LOG_DIR / "realtime_stt_app_error.log"
+CONFIG_DIR = BASE_DIR / "config"
+CONFIG_FILE_PATH = CONFIG_DIR / "openai_config.json"
+LOG_FILE_PATH = LOG_DIR / "meeting_summary_app_error.log"
 
-WINDOWS_FFMPEG_CANDIDATES = (
-    BASE_DIR / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
-    BASE_DIR / "ffmpeg" / "bin" / "ffmpeg.exe",
-    BASE_DIR / "bin" / "ffmpeg.exe",
-)
+# OpenAI 음성 전사 API는 큰 파일을 보내면 시간이 오래 걸리고 실패 가능성도 커집니다.
+# 이 예제는 초보자가 테스트하기 쉽게 25MB까지만 받도록 제한합니다.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+SUPPORTED_AUDIO_SUFFIXES = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm"}
 
-SUPPORTED_WHISPER_MODELS = ("tiny", "base", "small", "medium", "large")
-DEFAULT_WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium").strip().lower() or "medium"
-
-
-def read_int_env(env_name: str, default: int, minimum: int = 1) -> int:
-    """정수 환경변수를 읽고, 잘못된 값이 오면 기본값을 사용합니다."""
-    raw_value = os.environ.get(env_name, str(default)).strip()
-    try:
-        return max(minimum, int(raw_value))
-    except ValueError:
-        return default
-
-
-def read_float_env(env_name: str, default: float, minimum: float = 0.1) -> float:
-    """실수 환경변수를 읽고, 잘못된 값이 오면 기본값을 사용합니다."""
-    raw_value = os.environ.get(env_name, str(default)).strip()
-    try:
-        return max(minimum, float(raw_value))
-    except ValueError:
-        return default
-
-
-MAX_CONCURRENT_WS_CLIENTS = read_int_env("MAX_CONCURRENT_WS_CLIENTS", 5, minimum=1)
-WEBSOCKET_RECEIVE_TIMEOUT_SECONDS = read_float_env("WEBSOCKET_RECEIVE_TIMEOUT_SECONDS", 120.0, minimum=1.0)
-UVICORN_WS_PING_INTERVAL_SECONDS = read_float_env("UVICORN_WS_PING_INTERVAL_SECONDS", 20.0, minimum=1.0)
-UVICORN_WS_PING_TIMEOUT_SECONDS = read_float_env("UVICORN_WS_PING_TIMEOUT_SECONDS", 20.0, minimum=1.0)
+# 설정 파일이 없을 때 자동 생성할 기본값입니다.
+# api_key는 사용자가 직접 config/openai_config.json에 입력해야 합니다.
+DEFAULT_CONFIG = {
+    "api_key": "",
+    "summary_model": "gpt-5.2",
+    "transcription_model": "gpt-4o-mini-transcribe",
+    "meeting_language": "ko",
+}
 
 
 def configure_logging() -> logging.Logger:
-    """오류를 파일로 남기기 위한 logger를 준비합니다."""
+    """오류를 파일에 남기기 위한 logger를 준비합니다.
+
+    서버에서 문제가 생겼을 때 브라우저에는 간단한 메시지만 보여주고,
+    자세한 원인은 `logs/meeting_summary_app_error.log`에 기록합니다.
+    """
+
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    logger = logging.getLogger("realtime_stt_app")
+    logger = logging.getLogger("meeting_summary_app")
     logger.setLevel(logging.INFO)
+
+    # uvicorn reload 또는 테스트 과정에서 이 함수가 여러 번 호출될 수 있습니다.
+    # 이미 handler가 있으면 중복 로그가 쌓이지 않도록 그대로 반환합니다.
     if logger.handlers:
         return logger
 
@@ -148,51 +85,11 @@ def configure_logging() -> logging.Logger:
 
 
 logger = configure_logging()
-active_ws_clients = 0
-active_ws_clients_lock = asyncio.Lock()
-
-
-def ensure_ffmpeg_available() -> str:
-    """Whisper가 오디오를 읽을 수 있도록 ffmpeg 실행 파일을 찾습니다."""
-    configured_candidates = [
-        os.environ.get("FFMPEG_PATH"),
-        os.environ.get("FFMPEG_EXE"),
-    ]
-
-    configured_bin_dir = os.environ.get("FFMPEG_BIN_DIR")
-    if configured_bin_dir:
-        configured_candidates.append(str(Path(configured_bin_dir) / "ffmpeg.exe"))
-
-    for candidate in configured_candidates:
-        if candidate and Path(candidate).is_file():
-            ffmpeg_path = str(Path(candidate).resolve())
-            break
-    else:
-        ffmpeg_path = shutil.which("ffmpeg") or ""
-        if not ffmpeg_path:
-            for candidate in WINDOWS_FFMPEG_CANDIDATES:
-                if candidate.is_file():
-                    ffmpeg_path = str(candidate.resolve())
-                    break
-
-    if not ffmpeg_path:
-        raise RuntimeError(
-            "ffmpeg executable was not found. Install FFmpeg and add it to PATH, "
-            "or set FFMPEG_PATH/FFMPEG_EXE/FFMPEG_BIN_DIR to its location."
-        )
-
-    ffmpeg_dir = str(Path(ffmpeg_path).resolve().parent)
-    current_path = os.environ.get("PATH", "")
-    path_entries = current_path.split(os.pathsep) if current_path else []
-    if ffmpeg_dir not in path_entries:
-        os.environ["PATH"] = os.pathsep.join([ffmpeg_dir, *path_entries]) if path_entries else ffmpeg_dir
-
-    os.environ.setdefault("IMAGEIO_FFMPEG_EXE", ffmpeg_path)
-    return ffmpeg_path
 
 
 def build_error_details(exc: Exception) -> str:
-    """traceback을 하나의 문자열로 합쳐서 로그와 화면에 함께 쓰기 쉽게 만듭니다."""
+    """예외의 전체 traceback을 문자열로 바꿉니다."""
+
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
 
 
@@ -200,20 +97,16 @@ def log_exception_to_file(
     *,
     title: str,
     request: Request | None = None,
-    websocket: WebSocket | None = None,
     exc: Exception | None = None,
     extra_message: str | None = None,
 ) -> None:
-    """오류 제목, 요청 정보, traceback을 모두 로그 파일에 남깁니다."""
+    """요청 정보와 예외 정보를 로그 파일에 보기 좋게 남깁니다."""
+
     message_lines = [title]
 
     if request is not None:
         message_lines.append(f"method={request.method}")
         message_lines.append(f"url={request.url}")
-
-    if websocket is not None:
-        message_lines.append(f"websocket_url={websocket.url}")
-        message_lines.append(f"client={websocket.client}")
 
     if extra_message:
         message_lines.append(extra_message)
@@ -226,133 +119,174 @@ def log_exception_to_file(
     logger.error("\n".join(message_lines))
 
 
-class WhisperService:
-    """선택된 Whisper 모델을 필요할 때만 메모리에 올리고 재사용합니다."""
+def ensure_config_file() -> None:
+    """설정 파일이 없으면 기본 설정 파일을 자동으로 만듭니다."""
 
-    def __init__(self, model_name: str = DEFAULT_WHISPER_MODEL) -> None:
-        self.model_name = self.validate_model_name(model_name)
-        self._models: dict[str, Any] = {}
-        self._model_locks: dict[str, Lock] = {}
-        self._models_lock = RLock()
-        self._ffmpeg_path: str | None = None
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if CONFIG_FILE_PATH.exists():
+        return
 
-    def validate_model_name(self, model_name: str | None) -> str:
-        """사용자가 고른 모델명이 지원 목록 안에 있는지 확인합니다."""
-        resolved = (model_name or self.model_name).strip().lower()
-        if resolved not in SUPPORTED_WHISPER_MODELS:
-            raise ValueError(
-                f"Unsupported Whisper model: {resolved}. "
-                f"Available models: {', '.join(SUPPORTED_WHISPER_MODELS)}"
+    CONFIG_FILE_PATH.write_text(
+        json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=4) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_openai_config() -> dict[str, str]:
+    """OpenAI 설정 파일을 읽고, 누락된 값은 DEFAULT_CONFIG로 채웁니다."""
+
+    ensure_config_file()
+    try:
+        raw_config = json.loads(CONFIG_FILE_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"OpenAI 설정 JSON 형식이 올바르지 않습니다: {CONFIG_FILE_PATH}") from exc
+
+    config = {**DEFAULT_CONFIG, **raw_config}
+
+    # JSON에는 숫자/불리언 등도 들어갈 수 있으므로 모든 값을 문자열로 통일합니다.
+    return {key: str(value).strip() for key, value in config.items()}
+
+
+class MeetingSummaryService:
+    """OpenAI API 호출을 담당하는 서비스 클래스.
+
+    FastAPI 라우터는 HTTP 요청/응답만 처리하고, 실제 업무 로직(STT와 요약)은
+    이 클래스에 모아두었습니다. 이렇게 나누면 화면/API 코드와 AI 처리 코드를
+    따로 이해할 수 있어 유지보수가 쉬워집니다.
+    """
+
+    def __init__(self, config_path: Path = CONFIG_FILE_PATH) -> None:
+        self.config_path = config_path
+
+    def _load_config(self) -> dict[str, str]:
+        """현재 설정 파일을 읽습니다. 요청 때마다 읽어 서버 재시작 없이 설정 변경을 반영합니다."""
+
+        return load_openai_config()
+
+    def _get_client(self, config: dict[str, str]) -> OpenAI:
+        """OpenAI API 클라이언트를 만듭니다."""
+
+        api_key = config.get("api_key", "")
+        if not api_key:
+            raise RuntimeError(
+                f"OpenAI API key가 없습니다. {self.config_path} 파일의 api_key에 값을 넣어주세요."
             )
-        return resolved
+        return OpenAI(api_key=api_key)
 
-    def _get_model_lock(self, model_name: str) -> Lock:
-        """모델별 잠금을 따로 두어 동시에 여러 모델을 안전하게 로드합니다."""
-        with self._models_lock:
-            return self._model_locks.setdefault(model_name, Lock())
+    def transcribe_audio(self, audio_path: Path, filename: str, prompt: str, language: str) -> str:
+        """음성 파일을 텍스트로 변환합니다.
 
-    def _get_model(self, model_name: str | None = None) -> Any:
-        """아직 로드되지 않은 Whisper 모델이면 이 시점에 로드합니다."""
-        resolved_model_name = self.validate_model_name(model_name)
-        if resolved_model_name not in self._models:
-            model_lock = self._get_model_lock(resolved_model_name)
-            with model_lock:
-                if resolved_model_name not in self._models:
-                    self._models[resolved_model_name] = whisper.load_model(resolved_model_name)
-        return self._models[resolved_model_name]
+        `prompt`에는 참석자 이름, 자주 나오는 제품명, 프로젝트명처럼
+        모델이 헷갈릴 수 있는 단어를 넣으면 전사 품질에 도움이 됩니다.
+        """
 
-    def transcribe_file(
+        config = self._load_config()
+        client = self._get_client(config)
+        transcription_model = config.get("transcription_model") or DEFAULT_CONFIG["transcription_model"]
+
+        with audio_path.open("rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model=transcription_model,
+                file=audio_file,
+                prompt=prompt or None,
+                language=language or None,
+            )
+
+        return (getattr(transcription, "text", "") or "").strip()
+
+    def summarize_meeting(
         self,
-        audio_path: str,
-        language: str | None,
-        prompt: str | None,
-        model_name: str | None = None,
-    ) -> dict[str, Any]:
-        """오디오 파일 하나를 Whisper로 전사하고 결과 dict를 돌려줍니다."""
-        if self._ffmpeg_path is None:
-            self._ffmpeg_path = ensure_ffmpeg_available()
+        *,
+        transcript: str,
+        source_name: str,
+        meeting_title: str,
+        summary_focus: str,
+        language: str,
+    ) -> str:
+        """전사된 회의록 텍스트를 회의자료 형태로 요약합니다."""
 
-        resolved_model_name = self.validate_model_name(model_name)
-        model = self._get_model(resolved_model_name)
-        options: dict[str, Any] = {"fp16": False}
+        if not transcript:
+            raise RuntimeError("전사 결과가 비어 있어 회의 요약을 만들 수 없습니다.")
 
-        if language:
-            options["language"] = language
-        if prompt:
-            options["initial_prompt"] = prompt
+        config = self._load_config()
+        client = self._get_client(config)
+        summary_model = config.get("summary_model") or DEFAULT_CONFIG["summary_model"]
 
-        result = model.transcribe(audio_path, **options)
-        result["model"] = resolved_model_name
-        return result
+        title = meeting_title.strip() or Path(source_name).stem or "회의"
+        focus = summary_focus.strip() or "핵심 논의, 결정 사항, 후속 조치 목록을 중심으로 정리"
+        output_language = language.strip() or config.get("meeting_language") or "ko"
+
+        response = client.responses.create(
+            model=summary_model,
+            instructions=(
+                "You are an expert meeting assistant. Summarize meeting transcripts into clear, "
+                "actionable meeting materials. Use the requested output language. Do not invent facts."
+            ),
+            input=(
+                f"Output language: {output_language}\n"
+                f"Meeting title: {title}\n"
+                f"Source file: {source_name}\n"
+                f"Summary focus: {focus}\n\n"
+                "Create meeting materials with these sections:\n"
+                "1. 회의 개요\n"
+                "2. 핵심 요약\n"
+                "3. 주요 논의 내용\n"
+                "4. 결정 사항\n"
+                "5. 후속 조치(Action Items) - 담당자와 기한이 없으면 '미정'으로 표시\n"
+                "6. 리스크 및 확인 필요 사항\n\n"
+                f"Transcript:\n{transcript}"
+            ),
+        )
+
+        summary = (getattr(response, "output_text", "") or "").strip()
+        if not summary:
+            raise RuntimeError("OpenAI 요약 응답이 비어 있습니다.")
+        return summary
+
+    def transcribe_and_summarize(
+        self,
+        *,
+        audio_path: Path,
+        source_name: str,
+        transcription_prompt: str,
+        meeting_title: str,
+        summary_focus: str,
+        language: str,
+    ) -> dict[str, str]:
+        """전사와 요약을 순서대로 실행합니다."""
+
+        transcript = self.transcribe_audio(audio_path, source_name, transcription_prompt, language)
+        summary = self.summarize_meeting(
+            transcript=transcript,
+            source_name=source_name,
+            meeting_title=meeting_title,
+            summary_focus=summary_focus,
+            language=language,
+        )
+        return {"transcript": transcript, "summary": summary}
 
 
-stt_service = WhisperService(model_name=DEFAULT_WHISPER_MODEL)
+# 서비스 객체는 앱 시작 시 한 번 만들어두고 요청마다 재사용합니다.
+summary_service = MeetingSummaryService()
 
+# ---------------------------------------------------------------------------
+# FastAPI 앱 생성과 화면 연결
+# ---------------------------------------------------------------------------
 app = FastAPI(
-    title="Meeting Realtime STT",
-    description="FastAPI, HTML, Whisper, WebSocket based meeting transcription web app",
-    version="3.2.0",
+    title="Meeting Recording Summary",
+    description="Record meeting audio locally, upload it, and summarize it with the OpenAI API.",
+    version="4.0.0",
 )
 
+# 브라우저가 /static/meeting_stt.css, /static/meeting_stt.js를 요청할 수 있게 연결합니다.
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
-async def send_ws_json(websocket: WebSocket, payload: dict[str, Any]) -> None:
-    """WebSocket JSON 전송을 한 곳에서 처리합니다."""
-    await websocket.send_text(json.dumps(payload, ensure_ascii=False))
-
-
-async def send_ws_error(websocket: WebSocket, title: str, exc: Exception, extra_message: str = "") -> None:
-    """브라우저가 바로 볼 수 있도록 오류 상세 내용을 WebSocket으로 전송합니다."""
-    await send_ws_json(
-        websocket,
-        {
-            "type": "error",
-            "title": title,
-            "message": str(exc),
-            "detail": build_error_details(exc),
-            "extra": extra_message,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        },
-    )
-
-
-async def try_acquire_ws_client_slot() -> bool:
-    """동시 접속자 수 제한을 넘지 않았을 때만 새 WebSocket 접속을 허용합니다."""
-    global active_ws_clients
-
-    async with active_ws_clients_lock:
-        if active_ws_clients >= MAX_CONCURRENT_WS_CLIENTS:
-            return False
-        active_ws_clients += 1
-        return True
-
-
-async def release_ws_client_slot() -> None:
-    """WebSocket 연결이 끝나면 사용 중인 접속 슬롯을 반납합니다."""
-    global active_ws_clients
-
-    async with active_ws_clients_lock:
-        active_ws_clients = max(0, active_ws_clients - 1)
-
-
-def build_segments(result: dict[str, Any]) -> list[dict[str, Any]]:
-    """Whisper segment 중 텍스트가 있는 항목만 화면용으로 정리합니다."""
-    return [
-        {
-            "start": round(float(segment.get("start", 0.0)), 2),
-            "end": round(float(segment.get("end", 0.0)), 2),
-            "text": (segment.get("text") or "").strip(),
-        }
-        for segment in result.get("segments", [])
-        if (segment.get("text") or "").strip()
-    ]
-
-
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    """HTTPException이 나면 로그를 남기고 JSON 형태로 응답합니다."""
+    """사용자가 잘못된 파일을 올리는 등 예상 가능한 HTTP 오류를 JSON으로 응답합니다."""
+
     log_exception_to_file(
         title="HTTPException occurred",
         request=request,
@@ -364,283 +298,160 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """처리되지 않은 예외를 로그로 남기고 500 응답을 돌려줍니다."""
+    """처리하지 못한 예외가 서버 밖으로 새지 않도록 마지막 안전망 역할을 합니다."""
+
     log_exception_to_file(title="Unhandled exception occurred", request=request, exc=exc)
     return JSONResponse(
         status_code=500,
-        content={"detail": "서버 내부 오류가 발생했습니다. logs/realtime_stt_app_error.log 를 확인해 주세요."},
+        content={"detail": "서버 내부 오류가 발생했습니다. logs/meeting_summary_app_error.log 파일을 확인해 주세요."},
     )
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    """메인 HTML 화면을 반환합니다."""
+    """메인 화면을 렌더링합니다.
+
+    Jinja2 템플릿에 모델명, 설정 파일 경로 같은 값을 넘기면
+    `meeting_stt.html`에서 `{{ summary_model }}`처럼 사용할 수 있습니다.
+    """
+
+    ensure_config_file()
+    config = load_openai_config()
     return templates.TemplateResponse(
         name="meeting_stt.html",
         context={
             "request": request,
-            "page_title": "회의 실시간 STT",
-            "model_name": stt_service.model_name,
-            "supported_models": SUPPORTED_WHISPER_MODELS,
+            "page_title": "회의 녹음 요약",
+            "summary_model": config.get("summary_model", DEFAULT_CONFIG["summary_model"]),
+            "transcription_model": config.get("transcription_model", DEFAULT_CONFIG["transcription_model"]),
+            "config_path": str(CONFIG_FILE_PATH),
         },
     )
 
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    """서버가 살아 있는지 점검하는 간단한 API입니다."""
+    """서버 상태를 확인하는 API입니다.
+
+    브라우저 화면에는 직접 쓰지 않지만, 테스트나 운영 점검에서
+    "서버가 살아 있는지", "API 키가 설정되었는지" 빠르게 확인할 수 있습니다.
+    """
+
+    ensure_config_file()
+    config = load_openai_config()
     return {
         "status": "ok",
-        "model": stt_service.model_name,
-        "transport": "websocket+upload",
-        "max_concurrent_ws_clients": MAX_CONCURRENT_WS_CLIENTS,
-        "websocket_receive_timeout_seconds": WEBSOCKET_RECEIVE_TIMEOUT_SECONDS,
-        "uvicorn_ws_ping_interval_seconds": UVICORN_WS_PING_INTERVAL_SECONDS,
-        "uvicorn_ws_ping_timeout_seconds": UVICORN_WS_PING_TIMEOUT_SECONDS,
-        "active_ws_clients": active_ws_clients,
+        "mode": "record-upload-summary",
+        "summary_model": config.get("summary_model"),
+        "transcription_model": config.get("transcription_model"),
+        "config_path": str(CONFIG_FILE_PATH),
+        "api_key_configured": bool(config.get("api_key")),
     }
 
 
-@app.post("/api/transcribe-file")
-async def transcribe_uploaded_file(
-    audio_file: UploadFile = File(...),
-    language: str = "ko",
-    prompt: str = "",
-    model_name: str = DEFAULT_WHISPER_MODEL,
-) -> dict[str, Any]:
-    """업로드된 파일을 Whisper로 전사해 JSON 형태로 돌려줍니다."""
-    temp_path: Path | None = None
-    resolved_model_name = stt_service.validate_model_name(model_name)
-    suffix = Path(audio_file.filename or "").suffix or ".webm"
+async def save_upload_to_temp_file(audio_file: UploadFile) -> Path:
+    """업로드된 음성 파일을 임시 파일로 저장합니다.
 
+    FastAPI의 UploadFile은 서버 메모리/임시 저장소에 있는 파일 같은 객체입니다.
+    OpenAI SDK에는 실제 파일 경로에서 연 파일 객체를 넘기는 편이 단순하므로,
+    여기서 OS 임시 폴더에 한 번 저장했다가 처리가 끝나면 삭제합니다.
+    """
+
+    suffix = Path(audio_file.filename or "").suffix.lower()
+    if suffix not in SUPPORTED_AUDIO_SUFFIXES:
+        supported = ", ".join(sorted(SUPPORTED_AUDIO_SUFFIXES))
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 오디오 형식입니다. 지원 형식: {supported}")
+
+    temp_path: Path | None = None
+    total_bytes = 0
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_path = Path(temp_file.name)
-            temp_file.write(await audio_file.read())
 
-        result = await asyncio.to_thread(
-            stt_service.transcribe_file,
-            str(temp_path),
-            language.strip() or "ko",
-            prompt.strip(),
-            resolved_model_name,
+            # 파일을 한 번에 읽지 않고 1MB씩 나누어 읽습니다.
+            # 이렇게 하면 큰 파일도 메모리를 과하게 쓰지 않고 처리할 수 있습니다.
+            while True:
+                chunk = await audio_file.read(1024 * 1024)
+                if not chunk:
+                    break
+
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="업로드 파일은 25MB 이하여야 합니다.")
+
+                temp_file.write(chunk)
+        return temp_path
+    except Exception:
+        # 저장 도중 오류가 나면 반쯤 만들어진 임시 파일을 지웁니다.
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+        raise
+
+
+@app.post("/api/summarize-recording")
+async def summarize_recording(
+    audio_file: UploadFile = File(...),
+    language: str = "ko",
+    transcription_prompt: str = "",
+    meeting_title: str = "",
+    summary_focus: str = "",
+) -> dict[str, str]:
+    """화면에서 업로드한 녹음 파일을 전사하고 요약합니다.
+
+    화면의 `FormData` 필드 이름과 이 함수의 매개변수 이름이 서로 맞아야 합니다.
+    예를 들어 JavaScript에서 `formData.append("audio_file", file)`로 보냈기 때문에
+    여기서도 `audio_file`이라는 이름으로 받습니다.
+    """
+
+    temp_path: Path | None = None
+    source_name = audio_file.filename or "meeting-recording.webm"
+
+    try:
+        temp_path = await save_upload_to_temp_file(audio_file)
+
+        # OpenAI SDK 호출은 동기 함수라 오래 걸릴 수 있습니다.
+        # run_in_threadpool로 별도 작업 스레드에서 실행해 FastAPI 이벤트 루프가 막히지 않게 합니다.
+        result = await run_in_threadpool(
+            summary_service.transcribe_and_summarize,
+            audio_path=temp_path,
+            source_name=source_name,
+            transcription_prompt=transcription_prompt.strip(),
+            meeting_title=meeting_title.strip(),
+            summary_focus=summary_focus.strip(),
+            language=language.strip() or "ko",
         )
         return {
-            "type": "transcript_batch",
-            "text": (result.get("text") or "").strip(),
-            "language": result.get("language") or language,
-            "model": result.get("model") or resolved_model_name,
-            "source_name": audio_file.filename or temp_path.name,
-            "segments": build_segments(result),
+            "type": "meeting_summary",
+            "source_name": source_name,
+            "transcript": result["transcript"],
+            "summary": result["summary"],
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         log_exception_to_file(
-            title="Uploaded audio transcription failed",
+            title="Meeting recording summarization failed",
             exc=exc,
-            extra_message=f"filename={audio_file.filename} | model_name={resolved_model_name}",
+            extra_message=f"filename={source_name}",
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
+        # 성공/실패와 관계없이 임시 파일과 업로드 파일 핸들을 정리합니다.
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
         await audio_file.close()
 
 
-@app.websocket("/ws/transcribe")
-async def websocket_transcribe(websocket: WebSocket) -> None:
-    """실시간 음성 청크를 받아 Whisper로 전사한 뒤 바로 다시 돌려줍니다."""
-    slot_acquired = await try_acquire_ws_client_slot()
-    await websocket.accept()
-
-    if not slot_acquired:
-        await send_ws_json(
-            websocket,
-            {
-                "type": "error",
-                "title": "동시 접속자 수 초과",
-                "message": (
-                    f"현재 허용된 동시 접속자 수({MAX_CONCURRENT_WS_CLIENTS})를 초과했습니다. "
-                    "잠시 후 다시 시도해 주세요."
-                ),
-                "detail": "",
-                "extra": "",
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        )
-        await websocket.close(code=1013, reason="Too many concurrent websocket clients")
-        return
-
-    language = "ko"
-    prompt = ""
-    model_name = stt_service.model_name
-    chunk_index = 0
-
-    await send_ws_json(
-        websocket,
-        {
-            "type": "ready",
-            "message": "WebSocket 연결이 완료되었습니다.",
-            "model": model_name,
-            "supported_models": list(SUPPORTED_WHISPER_MODELS),
-            "receive_timeout_seconds": WEBSOCKET_RECEIVE_TIMEOUT_SECONDS,
-            "max_concurrent_clients": MAX_CONCURRENT_WS_CLIENTS,
-        },
-    )
-
-    try:
-        while True:
-            try:
-                # 정해진 시간 동안 메시지가 없으면 유휴 연결로 보고 종료합니다.
-                message = await asyncio.wait_for(
-                    websocket.receive(),
-                    timeout=WEBSOCKET_RECEIVE_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError as exc:
-                log_exception_to_file(
-                    title="WebSocket receive timeout",
-                    websocket=websocket,
-                    exc=exc,
-                    extra_message=f"timeout_seconds={WEBSOCKET_RECEIVE_TIMEOUT_SECONDS}",
-                )
-                await send_ws_json(
-                    websocket,
-                    {
-                        "type": "error",
-                        "title": "WebSocket receive timeout",
-                        "message": (
-                            f"The connection was closed after "
-                            f"{WEBSOCKET_RECEIVE_TIMEOUT_SECONDS} seconds "
-                            "without any incoming message."
-                        ),
-                        "detail": "",
-                        "extra": "",
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    },
-                )
-                await websocket.close(code=1000, reason="WebSocket receive timeout")
-                break
-
-            if message.get("type") == "websocket.disconnect":
-                break
-
-            text_data = message.get("text")
-            bytes_data = message.get("bytes")
-
-            if text_data:
-                try:
-                    payload = json.loads(text_data)
-                except json.JSONDecodeError as exc:
-                    log_exception_to_file(
-                        title="WebSocket JSON parse failed",
-                        websocket=websocket,
-                        exc=exc,
-                        extra_message=f"raw_text={text_data}",
-                    )
-                    await send_ws_error(websocket, "설정 메시지 해석 실패", exc, text_data)
-                    continue
-
-                message_type = payload.get("type", "")
-
-                if message_type == "config":
-                    try:
-                        language = str(payload.get("language") or "ko").strip() or "ko"
-                        prompt = str(payload.get("prompt") or "").strip()
-                        model_name = stt_service.validate_model_name(str(payload.get("model_name") or model_name))
-                    except Exception as exc:
-                        await send_ws_error(websocket, "모델 설정 실패", exc)
-                        continue
-
-                    await send_ws_json(
-                        websocket,
-                        {
-                            "type": "config_ack",
-                            "language": language,
-                            "prompt": prompt,
-                            "model": model_name,
-                        },
-                    )
-                    continue
-
-                if message_type == "ping":
-                    await send_ws_json(websocket, {"type": "pong"})
-                    continue
-
-                await send_ws_json(
-                    websocket,
-                    {"type": "info", "message": f"지원하지 않는 텍스트 메시지입니다: {message_type}"},
-                )
-                continue
-
-            if bytes_data:
-                chunk_index += 1
-                started_at = time.perf_counter()
-                temp_path: Path | None = None
-
-                try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_file:
-                        temp_path = Path(temp_file.name)
-                        temp_file.write(bytes_data)
-
-                    result = await asyncio.to_thread(
-                        stt_service.transcribe_file,
-                        str(temp_path),
-                        language,
-                        prompt,
-                        model_name,
-                    )
-
-                    await send_ws_json(
-                        websocket,
-                        {
-                            "type": "transcript",
-                            "chunk_index": chunk_index,
-                            "text": (result.get("text") or "").strip(),
-                            "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                            "language": result.get("language") or language,
-                            "model": result.get("model") or model_name,
-                            "segments": build_segments(result),
-                        },
-                    )
-                except Exception as exc:
-                    log_exception_to_file(
-                        title="Whisper transcription failed over WebSocket",
-                        websocket=websocket,
-                        exc=exc,
-                        extra_message=f"chunk_index={chunk_index} | temp_path={temp_path} | model_name={model_name}",
-                    )
-                    await send_ws_error(
-                        websocket,
-                        "WebSocket STT 처리 실패",
-                        exc,
-                        f"chunk_index={chunk_index} | temp_path={temp_path} | model_name={model_name}",
-                    )
-                finally:
-                    if temp_path and temp_path.exists():
-                        temp_path.unlink(missing_ok=True)
-    except WebSocketDisconnect:
-        logger.info("WebSocket disconnected: %s", websocket.client)
-    except Exception as exc:
-        log_exception_to_file(title="Unhandled WebSocket exception", websocket=websocket, exc=exc)
-        try:
-            await send_ws_error(websocket, "WebSocket 서버 내부 오류", exc)
-        except Exception:
-            pass
-    finally:
-        if slot_acquired:
-            await release_ws_client_slot()
-
-
 def main() -> None:
-    """uvicorn 서버를 직접 실행할 때 사용하는 진입점입니다."""
+    """개발용 uvicorn 서버를 실행합니다."""
+
     import uvicorn
 
     uvicorn.run(
         "realtime_stt_app:app",
         host="127.0.0.1",
         port=8010,
-        reload=True,
-        ws_ping_interval=UVICORN_WS_PING_INTERVAL_SECONDS,
-        ws_ping_timeout=UVICORN_WS_PING_TIMEOUT_SECONDS,
+        reload=False,
     )
 
 

@@ -1,34 +1,4 @@
 <!DOCTYPE html>
-<!--
-프로그램 흐름 설명
-1. 이 HTML은 STT 화면의 입력창, 버튼, 회의록 영역, 오류 로그 영역을 배치합니다.
-2. JavaScript는 이 화면 요소들을 찾아 실시간 녹음, 파일 업로드, 복사, 저장 기능을 연결합니다.
-3. 회의록 영역에는 전사된 내용만 발화 블록 형태로 누적되고, 오류는 별도 로그 영역에 표시됩니다.
-
-이 화면이 정상 동작하려면 필요한 것
-1. 이 HTML 파일은 단독으로 열어서 쓰는 문서가 아니라 FastAPI 서버가 렌더링하는 템플릿입니다.
-2. 따라서 아래 항목이 먼저 준비되어야 합니다.
-   - src/realtime_stt_app.py 서버 실행
-   - static/meeting_stt.js 파일 로드 성공
-   - static/meeting_stt.css 파일 로드 성공
-   - 브라우저가 WebSocket과 MediaRecorder를 지원할 것
-3. 설치가 필요한 핵심 Python 모듈
-   - fastapi
-   - uvicorn
-   - openai-whisper
-   - jinja2
-   - python-multipart
-   - torch
-4. 별도 외부 도구
-   - ffmpeg
-
-설치 및 실행 순서 요약
-1. 프로젝트 루트에서 가상환경을 활성화합니다.
-2. pip install fastapi uvicorn openai-whisper jinja2 python-multipart torch torchvision torchaudio
-3. ffmpeg를 설치하고 PATH 또는 환경변수로 연결합니다.
-4. python src\realtime_stt_app.py 로 서버를 실행합니다.
-5. 브라우저에서 http://127.0.0.1:8010 을 엽니다.
--->
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -37,60 +7,71 @@
     <link rel="stylesheet" href="{{ url_for('static', path='meeting_stt.css') }}">
 </head>
 <body>
+    <!--
+        이 파일은 FastAPI가 렌더링하는 화면 템플릿입니다.
+        {{ page_title }}처럼 중괄호 두 개로 감싼 값은 src/realtime_stt_app.py의
+        index() 함수가 context로 넘겨준 값으로 치환됩니다.
+    -->
     <main class="page">
+        <!-- 화면 상단의 제목 영역입니다. 사용자가 이 앱의 목적을 처음 파악하는 곳입니다. -->
         <section class="hero">
-            <p class="eyebrow">FastAPI + Whisper + WebSocket</p>
+            <p class="eyebrow">OpenAI API Meeting Assistant</p>
             <h1>{{ page_title }}</h1>
             <p class="subtitle">
-                실시간 전사와 파일 일괄 전사를 함께 사용할 수 있으며, 회의록 화면에는 전사된 내용만 발화 단위로 정리해 보여줍니다.
+                회의 음성을 브라우저에서 녹음해 파일로 저장한 뒤, 저장한 녹음 파일을 업로드하면
+                OpenAI API가 전사문과 회의자료 요약을 생성합니다.
             </p>
         </section>
 
+        <!-- 녹음과 요약에 필요한 입력값을 받는 조작 영역입니다. -->
         <section class="panel controls">
             <div class="field-grid">
+                <label class="field">
+                    <span>회의 제목</span>
+                    <input id="meetingTitleInput" type="text" placeholder="예: 주간 운영 회의">
+                </label>
+
                 <label class="field">
                     <span>언어 코드</span>
                     <input id="languageInput" type="text" value="ko" placeholder="ko, en, ja">
                 </label>
 
-                <label class="field">
-                    <span>초기 프롬프트</span>
-                    <input id="promptInput" type="text" placeholder="프로젝트명, 참석자 이름, 제품명">
+                <label class="field wide">
+                    <span>전사 힌트</span>
+                    <input id="promptInput" type="text" placeholder="참석자, 프로젝트명, 제품명처럼 음성 인식에 도움이 되는 단어">
                 </label>
 
-                <label class="field">
-                    <span>Whisper 모델</span>
-                    <select id="modelSelect">
-                        {% for item in supported_models %}
-                        <option value="{{ item }}" {% if item == model_name %}selected{% endif %}>{{ item }}</option>
-                        {% endfor %}
-                    </select>
-                </label>
-
-                <label class="field">
-                    <span>실시간 청크 간격(초)</span>
-                    <input id="chunkSecondsInput" type="number" min="1" max="5" step="1" value="1">
+                <label class="field wide">
+                    <span>요약 관점</span>
+                    <input id="summaryFocusInput" type="text" placeholder="예: 결정 사항과 담당자별 후속 조치를 자세히 정리">
                 </label>
             </div>
 
+            <!-- 각 버튼의 실제 동작은 static/meeting_stt.js에서 addEventListener로 연결합니다. -->
             <div class="actions">
-                <button id="startButton" class="primary" type="button">실시간 녹음 시작</button>
+                <button id="startButton" class="primary" type="button">녹음 시작</button>
                 <button id="stopButton" type="button" disabled>녹음 중지</button>
                 <button id="saveRecordingButton" type="button" disabled>녹음 파일 저장</button>
-                <button id="downloadButton" type="button">텍스트 다운로드</button>
+                <button id="downloadSummaryButton" type="button">회의자료 다운로드</button>
             </div>
 
+            <!-- 현재 앱 상태를 사용자에게 보여주는 영역입니다. -->
             <div class="status-row">
                 <span id="statusBadge" class="badge idle">대기 중</span>
-                <span id="statusText">WebSocket 연결을 준비하고 있습니다.</span>
+                <span id="statusText">마이크 권한을 허용하고 회의를 녹음하세요.</span>
+            </div>
+
+            <div class="model-note">
+                전사 모델: {{ transcription_model }} · 요약 모델: {{ summary_model }} · 설정 파일: {{ config_path }}
             </div>
         </section>
 
+        <!-- 사용자가 저장된 오디오 파일을 선택하고 서버로 업로드하는 영역입니다. -->
         <section class="panel upload-panel">
             <div class="panel-header">
                 <div>
-                    <h2>녹취 파일 일괄 전사</h2>
-                    <p id="uploadMeta">음성 파일을 선택한 뒤 서버로 전송하면 전사 결과가 회의록 영역에 추가됩니다.</p>
+                    <h2>녹음 파일 업로드</h2>
+                    <p id="uploadMeta">저장한 녹음 파일을 선택하면 회의 전사와 요약을 생성합니다. 업로드 파일은 25MB 이하여야 합니다.</p>
                 </div>
             </div>
             <div class="upload-row">
@@ -98,33 +79,51 @@
                     id="audioFileInput"
                     class="file-input"
                     type="file"
-                    multiple
-                    accept=".mp3,.wav,.m4a,.webm,.mp4,.mpeg,.mpga,.ogg"
+                    accept=".mp3,.wav,.m4a,.webm,.mp4,.mpeg,.mpga"
                 >
-                <button id="uploadTranscribeButton" type="button">선택 파일 일괄 전사</button>
+                <button id="uploadSummaryButton" type="button">회의자료 요약 생성</button>
             </div>
         </section>
 
+        <!-- OpenAI가 만든 회의 요약 결과를 보여주는 영역입니다. -->
         <section class="panel transcript-panel">
             <div class="panel-header">
                 <div>
-                    <h2>실시간 회의록</h2>
-                    <p id="transcriptMeta">전사된 내용만 발화자별 줄바꿈 형식으로 누적됩니다.</p>
+                    <h2>회의자료 요약</h2>
+                    <p id="summaryMeta">요약 결과가 여기에 표시됩니다.</p>
                 </div>
                 <div class="panel-actions">
-                    <button id="copyTranscriptButton" type="button">회의록 복사</button>
-                    <button id="clearTranscriptButton" type="button">회의록 지우기</button>
+                    <button id="copySummaryButton" type="button">요약 복사</button>
+                    <button id="clearSummaryButton" type="button">결과 지우기</button>
+                </div>
+            </div>
+            <textarea
+                id="summaryText"
+                class="text-log transcript-text"
+                aria-label="회의자료 요약"
+                readonly
+                placeholder="녹음 파일을 업로드하면 요약 결과가 표시됩니다."
+            ></textarea>
+        </section>
+
+        <!-- 요약의 원본이 되는 전체 전사문을 보여주는 영역입니다. -->
+        <section class="panel transcript-panel">
+            <div class="panel-header">
+                <div>
+                    <h2>원문 전사</h2>
+                    <p id="transcriptMeta">업로드한 녹음 파일의 전사 원문이 표시됩니다.</p>
                 </div>
             </div>
             <textarea
                 id="transcriptText"
-                class="text-log transcript-text"
-                aria-label="실시간 회의록"
+                class="text-log"
+                aria-label="원문 전사"
                 readonly
-                placeholder="전사된 텍스트가 여기에 누적됩니다."
+                placeholder="전사 원문이 여기에 표시됩니다."
             ></textarea>
         </section>
 
+        <!-- 사용 중 발생한 오류를 사용자가 확인할 수 있도록 별도로 모아둡니다. -->
         <section id="errorPanel" class="panel error-panel hidden">
             <div class="panel-header">
                 <div>
@@ -146,9 +145,9 @@
     </main>
 
     <script>
-        window.STT_APP_CONFIG = {
-            websocketUrl: `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/transcribe`,
-            fileTranscribeUrl: `${location.protocol}//${location.host}/api/transcribe-file`
+        // JavaScript 파일에서 사용할 서버 API 주소를 전역 설정으로 제공합니다.
+        window.MEETING_APP_CONFIG = {
+            summarizeUrl: `${location.protocol}//${location.host}/api/summarize-recording`
         };
     </script>
     <script src="{{ url_for('static', path='meeting_stt.js') }}" defer></script>
