@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import subprocess
 import tempfile
 import traceback
 from pathlib import Path
@@ -44,10 +46,10 @@ CONFIG_DIR = BASE_DIR / "config"
 CONFIG_FILE_PATH = CONFIG_DIR / "openai_config.json"
 LOG_FILE_PATH = LOG_DIR / "meeting_summary_app_error.log"
 
-# OpenAI 음성 전사 API는 큰 파일을 보내면 시간이 오래 걸리고 실패 가능성도 커집니다.
-# 이 예제는 초보자가 테스트하기 쉽게 25MB까지만 받도록 제한합니다.
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 SUPPORTED_AUDIO_SUFFIXES = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm"}
+TRANSCRIPTION_CHUNK_SECONDS = 5 * 60
+DIRECT_SUMMARY_MAX_CHARS = 60_000
+TRANSCRIPT_SUMMARY_CHUNK_CHARS = 40_000
 
 # 설정 파일이 없을 때 자동 생성할 기본값입니다.
 # api_key는 사용자가 직접 config/openai_config.json에 입력해야 합니다.
@@ -173,6 +175,160 @@ class MeetingSummaryService:
             )
         return OpenAI(api_key=api_key)
 
+    def _find_ffmpeg(self) -> str:
+        """긴 오디오를 안전하게 나누기 위한 ffmpeg 실행 파일을 찾습니다."""
+
+        ffmpeg_path = shutil.which("ffmpeg")
+        if ffmpeg_path:
+            return ffmpeg_path
+
+        local_ffmpeg = BASE_DIR / "ffmpeg.exe"
+        if local_ffmpeg.exists():
+            return str(local_ffmpeg)
+
+        raise RuntimeError(
+            "긴 오디오를 모델 한도 안에서 처리하려면 ffmpeg가 필요합니다. "
+            "ffmpeg를 설치하거나 ffmpeg.exe를 프로젝트 폴더에 넣어 주세요."
+        )
+
+    def _split_audio_for_transcription(self, audio_path: Path, output_dir: Path) -> list[Path]:
+        """오디오를 전사 모델이 처리하기 쉬운 길이의 MP3 조각으로 나눕니다."""
+
+        ffmpeg_path = self._find_ffmpeg()
+        output_pattern = output_dir / "transcription_chunk_%03d.mp3"
+        command = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(audio_path),
+            "-vn",
+            "-map",
+            "0:a:0",
+            "-f",
+            "segment",
+            "-segment_time",
+            str(TRANSCRIPTION_CHUNK_SECONDS),
+            "-reset_timestamps",
+            "1",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "64k",
+            str(output_pattern),
+        ]
+
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=60 * 30,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("ffmpeg 실행 파일을 찾을 수 없습니다.") from exc
+        except OSError as exc:
+            raise RuntimeError(f"ffmpeg를 실행하지 못했습니다. 설치 상태를 확인해 주세요: {exc}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("오디오 분할 시간이 너무 오래 걸려 중단했습니다.") from exc
+
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise RuntimeError(f"오디오 파일을 분할하지 못했습니다. ffmpeg 오류: {detail}")
+
+        chunk_paths = sorted(output_dir.glob("transcription_chunk_*.mp3"))
+        if not chunk_paths:
+            raise RuntimeError("오디오 파일을 분할했지만 전사할 조각 파일이 만들어지지 않았습니다.")
+        return chunk_paths
+
+    def _transcribe_audio_file(
+        self,
+        *,
+        client: OpenAI,
+        transcription_model: str,
+        audio_path: Path,
+        prompt: str,
+        language: str,
+    ) -> str:
+        """단일 오디오 파일을 OpenAI 전사 API로 보냅니다."""
+
+        with audio_path.open("rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model=transcription_model,
+                file=audio_file,
+                prompt=prompt or None,
+                language=language or None,
+            )
+
+        return (getattr(transcription, "text", "") or "").strip()
+
+    def _split_text_by_chars(self, text: str, chunk_size: int) -> list[str]:
+        """긴 전사문을 문단 단위에 가깝게 나눕니다."""
+
+        chunks: list[str] = []
+        current_lines: list[str] = []
+        current_size = 0
+
+        for line in text.splitlines():
+            line_size = len(line) + 1
+            if current_lines and current_size + line_size > chunk_size:
+                chunks.append("\n".join(current_lines).strip())
+                current_lines = []
+                current_size = 0
+
+            current_lines.append(line)
+            current_size += line_size
+
+        if current_lines:
+            chunks.append("\n".join(current_lines).strip())
+
+        return [chunk for chunk in chunks if chunk]
+
+    def _request_meeting_summary(
+        self,
+        *,
+        client: OpenAI,
+        summary_model: str,
+        source_name: str,
+        title: str,
+        focus: str,
+        output_language: str,
+        transcript: str,
+        mode_note: str = "",
+    ) -> str:
+        """Responses API에 회의 요약 생성을 요청합니다."""
+
+        response = client.responses.create(
+            model=summary_model,
+            instructions=(
+                "You are an expert meeting assistant. Summarize meeting transcripts into clear, "
+                "actionable meeting materials. Use the requested output language. Do not invent facts."
+            ),
+            input=(
+                f"Output language: {output_language}\n"
+                f"Meeting title: {title}\n"
+                f"Source file: {source_name}\n"
+                f"Summary focus: {focus}\n"
+                f"{mode_note}\n\n"
+                "Create meeting materials with these sections:\n"
+                "1. 회의 개요\n"
+                "2. 핵심 요약\n"
+                "3. 주요 논의 내용\n"
+                "4. 결정 사항\n"
+                "5. 후속 조치(Action Items) - 담당자와 기한이 없으면 '미정'으로 표시\n"
+                "6. 리스크 및 확인 필요 사항\n\n"
+                f"Transcript:\n{transcript}"
+            ),
+        )
+
+        summary = (getattr(response, "output_text", "") or "").strip()
+        if not summary:
+            raise RuntimeError("OpenAI 요약 응답이 비어 있습니다.")
+        return summary
+
     def transcribe_audio(self, audio_path: Path, filename: str, prompt: str, language: str) -> str:
         """음성 파일을 텍스트로 변환합니다.
 
@@ -184,15 +340,30 @@ class MeetingSummaryService:
         client = self._get_client(config)
         transcription_model = config.get("transcription_model") or DEFAULT_CONFIG["transcription_model"]
 
-        with audio_path.open("rb") as audio_file:
-            transcription = client.audio.transcriptions.create(
-                model=transcription_model,
-                file=audio_file,
-                prompt=prompt or None,
-                language=language or None,
-            )
+        with tempfile.TemporaryDirectory(prefix="meeting-audio-chunks-") as chunk_dir_name:
+            chunk_paths = self._split_audio_for_transcription(audio_path, Path(chunk_dir_name))
+            transcript_parts: list[str] = []
 
-        return (getattr(transcription, "text", "") or "").strip()
+            for index, chunk_path in enumerate(chunk_paths, start=1):
+                chunk_prompt = prompt
+                if len(chunk_paths) > 1:
+                    chunk_prompt = (
+                        f"{prompt}\n\n"
+                        f"This is part {index} of {len(chunk_paths)} from the same meeting recording. "
+                        "Keep names and terms consistent with the previous and next parts."
+                    ).strip()
+
+                chunk_text = self._transcribe_audio_file(
+                    client=client,
+                    transcription_model=transcription_model,
+                    audio_path=chunk_path,
+                    prompt=chunk_prompt,
+                    language=language,
+                )
+                if chunk_text:
+                    transcript_parts.append(f"[Part {index}/{len(chunk_paths)}]\n{chunk_text}")
+
+        return "\n\n".join(transcript_parts).strip()
 
     def summarize_meeting(
         self,
@@ -216,32 +387,45 @@ class MeetingSummaryService:
         focus = summary_focus.strip() or "핵심 논의, 결정 사항, 후속 조치 목록을 중심으로 정리"
         output_language = language.strip() or config.get("meeting_language") or "ko"
 
-        response = client.responses.create(
-            model=summary_model,
-            instructions=(
-                "You are an expert meeting assistant. Summarize meeting transcripts into clear, "
-                "actionable meeting materials. Use the requested output language. Do not invent facts."
-            ),
-            input=(
-                f"Output language: {output_language}\n"
-                f"Meeting title: {title}\n"
-                f"Source file: {source_name}\n"
-                f"Summary focus: {focus}\n\n"
-                "Create meeting materials with these sections:\n"
-                "1. 회의 개요\n"
-                "2. 핵심 요약\n"
-                "3. 주요 논의 내용\n"
-                "4. 결정 사항\n"
-                "5. 후속 조치(Action Items) - 담당자와 기한이 없으면 '미정'으로 표시\n"
-                "6. 리스크 및 확인 필요 사항\n\n"
-                f"Transcript:\n{transcript}"
-            ),
-        )
+        if len(transcript) <= DIRECT_SUMMARY_MAX_CHARS:
+            return self._request_meeting_summary(
+                client=client,
+                summary_model=summary_model,
+                source_name=source_name,
+                title=title,
+                focus=focus,
+                output_language=output_language,
+                transcript=transcript,
+            )
 
-        summary = (getattr(response, "output_text", "") or "").strip()
-        if not summary:
-            raise RuntimeError("OpenAI 요약 응답이 비어 있습니다.")
-        return summary
+        transcript_chunks = self._split_text_by_chars(transcript, TRANSCRIPT_SUMMARY_CHUNK_CHARS)
+        partial_summaries: list[str] = []
+        for index, chunk in enumerate(transcript_chunks, start=1):
+            partial_summary = self._request_meeting_summary(
+                client=client,
+                summary_model=summary_model,
+                source_name=f"{source_name} part {index}/{len(transcript_chunks)}",
+                title=title,
+                focus=(
+                    "This is one part of a long meeting transcript. Extract only facts, decisions, "
+                    f"risks, and action items from part {index}/{len(transcript_chunks)}. {focus}"
+                ),
+                output_language=output_language,
+                transcript=chunk,
+                mode_note=f"Long transcript partial summarization: part {index}/{len(transcript_chunks)}.",
+            )
+            partial_summaries.append(f"[Partial summary {index}/{len(transcript_chunks)}]\n{partial_summary}")
+
+        return self._request_meeting_summary(
+            client=client,
+            summary_model=summary_model,
+            source_name=source_name,
+            title=title,
+            focus=f"{focus} Combine the partial summaries into one final meeting material without duplication.",
+            output_language=output_language,
+            transcript="\n\n".join(partial_summaries),
+            mode_note="The transcript below contains partial summaries of a long meeting transcript.",
+        )
 
     def transcribe_and_summarize(
         self,
@@ -363,7 +547,6 @@ async def save_upload_to_temp_file(audio_file: UploadFile) -> Path:
         raise HTTPException(status_code=400, detail=f"지원하지 않는 오디오 형식입니다. 지원 형식: {supported}")
 
     temp_path: Path | None = None
-    total_bytes = 0
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_path = Path(temp_file.name)
@@ -374,10 +557,6 @@ async def save_upload_to_temp_file(audio_file: UploadFile) -> Path:
                 chunk = await audio_file.read(1024 * 1024)
                 if not chunk:
                     break
-
-                total_bytes += len(chunk)
-                if total_bytes > MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail="업로드 파일은 25MB 이하여야 합니다.")
 
                 temp_file.write(chunk)
         return temp_path

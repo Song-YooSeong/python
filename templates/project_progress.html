@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>프로젝트 진척관리</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/project_progress.css') }}">
+</head>
+<body>
+  <!--
+    이 HTML 파일은 화면의 뼈대만 담당합니다.
+    실제 데이터 조회/등록/수정/삭제는 static/project_progress.js가 FastAPI API를 호출해서 처리합니다.
+  -->
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>프로젝트 진척관리</h1>
+        <p>태스크 일정, 진척률, 종료 준수율, 산출물과 담당자를 한 화면에서 관리합니다.</p>
+      </div>
+      <div class="summary" aria-label="진척 요약">
+        <span><strong id="totalCount">0</strong>건</span>
+        <span><strong id="avgActual">0</strong>% 실제진척</span>
+        <span><strong id="avgCompliance">0</strong>% 종료준수</span>
+      </div>
+    </header>
+
+    <!--
+      입력 영역입니다.
+      상태, 계획진척률, 실제진척률, 공정준수율 입력칸은 일부러 만들지 않았습니다.
+      이 값들은 사용자가 수정하지 못하게 서버에서 자동 계산합니다.
+    -->
+    <section class="editor" aria-label="작업 입력">
+      <form id="taskForm">
+        <input type="hidden" id="taskId">
+        <label>
+          <span>과제</span>
+          <input id="project" name="project" placeholder="예: 모델 기본역량 향상">
+        </label>
+        <label class="wide">
+          <span>Task</span>
+          <input id="task" name="task" required placeholder="예: 요구사항 분석">
+        </label>
+        <label>
+          <span>계획시작일</span>
+          <input id="plan_start_date" name="plan_start_date" type="date">
+        </label>
+        <label>
+          <span>계획종료일</span>
+          <input id="plan_end_date" name="plan_end_date" type="date">
+        </label>
+        <label>
+          <span>실제시작일</span>
+          <input id="actual_start_date" name="actual_start_date" type="date">
+        </label>
+        <label>
+          <span>실제종료일</span>
+          <input id="actual_end_date" name="actual_end_date" type="date">
+        </label>
+        <label>
+          <span>담당자</span>
+          <input id="owner" name="owner" placeholder="예: 홍길동">
+        </label>
+        <label class="wide">
+          <span>예상산출물</span>
+          <input id="deliverable" name="deliverable" placeholder="예: 분석 보고서, 설계서">
+        </label>
+        <label>
+          <span>비고</span>
+          <input id="note" name="note">
+        </label>
+        <div class="form-actions">
+          <button type="button" class="secondary" id="resetBtn">초기화</button>
+          <button type="button" class="secondary" id="copyBtn">이전라인 복사</button>
+          <button type="submit" id="saveBtn">등록</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 검색어와 신호등 필터입니다. 실제 필터링은 JavaScript render() 함수가 처리합니다. -->
+    <section class="toolbar" aria-label="검색과 필터">
+      <input id="searchInput" placeholder="과제, Task, 담당자, 산출물 검색">
+      <select id="statusFilter">
+        <option value="">전체 신호</option>
+        <option value="green">초록</option>
+        <option value="yellow">노랑</option>
+        <option value="red">빨강</option>
+      </select>
+    </section>
+
+    <!--
+      목록 영역입니다.
+      tbody는 비워 두고, JavaScript가 서버에서 데이터를 받아 한 줄씩 자동으로 채웁니다.
+    -->
+    <section class="table-wrap" aria-label="작업 목록">
+      <table>
+        <thead>
+          <tr>
+            <th>과제</th>
+            <th>Task</th>
+            <th>상태</th>
+            <th>계획시작일</th>
+            <th>계획종료일</th>
+            <th>계획진척률</th>
+            <th>실제시작일</th>
+            <th>실제종료일</th>
+            <th>실제진척률</th>
+            <th>종료준수율</th>
+            <th>담당자</th>
+            <th>예상산출물</th>
+            <th>비고</th>
+            <th>관리</th>
+          </tr>
+        </thead>
+        <tbody id="taskTable"></tbody>
+      </table>
+      <div class="empty" id="emptyState">등록된 작업이 없습니다.</div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', path='/project_progress.js') }}"></script>
+</body>
+</html>
