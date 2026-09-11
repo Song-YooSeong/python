@@ -51,11 +51,14 @@ TRANSCRIPTION_CHUNK_SECONDS = 5 * 60
 DIRECT_SUMMARY_MAX_CHARS = 60_000
 TRANSCRIPT_SUMMARY_CHUNK_CHARS = 40_000
 
+# 브라우저의 <select>와 채팅 API가 공유하는 모델 목록입니다.
+# 화면에 표시하는 값과 서버가 허용하는 값을 동일하게 유지하기 위한 목록입니다.
+
 # 설정 파일이 없을 때 자동 생성할 기본값입니다.
 # api_key는 사용자가 직접 config/openai_config.json에 입력해야 합니다.
 DEFAULT_CONFIG = {
     "api_key": "",
-    "summary_model": "gpt-5.2",
+    "summary_model": "",
     "transcription_model": "gpt-4o-mini-transcribe",
     "meeting_language": "ko",
 }
@@ -174,6 +177,31 @@ class MeetingSummaryService:
                 f"OpenAI API key가 없습니다. {self.config_path} 파일의 api_key에 값을 넣어주세요."
             )
         return OpenAI(api_key=api_key)
+
+    def list_models(self) -> list[str]:
+        """OpenAI API에서 현재 계정이 사용할 수 있는 모델 ID를 가져옵니다."""
+
+        config = self._load_config()
+        client = self._get_client(config)
+        models = client.models.list()
+        model_ids = {
+            str(getattr(model, "id", "")).strip()
+            for model in models.data
+        }
+        return sorted(model_id for model_id in model_ids if model_id)
+
+    def _resolve_model(self, *, config: dict[str, str], selected_model: str) -> str:
+        """선택 모델, 설정 모델, OpenAI 조회 모델 순서로 사용할 모델을 결정합니다."""
+
+        if selected_model.strip():
+            return selected_model.strip()
+        configured_model = config.get("summary_model", "").strip()
+        if configured_model:
+            return configured_model
+        available_models = self.list_models()
+        if not available_models:
+            raise RuntimeError("OpenAI에서 사용할 수 있는 모델을 찾지 못했습니다.")
+        return available_models[0]
 
     def _find_ffmpeg(self) -> str:
         """긴 오디오를 안전하게 나누기 위한 ffmpeg 실행 파일을 찾습니다."""
@@ -373,6 +401,7 @@ class MeetingSummaryService:
         meeting_title: str,
         summary_focus: str,
         language: str,
+        model: str = "",
     ) -> str:
         """전사된 회의록 텍스트를 회의자료 형태로 요약합니다."""
 
@@ -381,7 +410,8 @@ class MeetingSummaryService:
 
         config = self._load_config()
         client = self._get_client(config)
-        summary_model = config.get("summary_model") or DEFAULT_CONFIG["summary_model"]
+        # 웹 화면에서 전달된 모델을 우선하고, 없으면 OpenAI 조회 결과를 사용합니다.
+        summary_model = self._resolve_model(config=config, selected_model=model)
 
         title = meeting_title.strip() or Path(source_name).stem or "회의"
         focus = summary_focus.strip() or "핵심 논의, 결정 사항, 후속 조치 목록을 중심으로 정리"
@@ -427,6 +457,36 @@ class MeetingSummaryService:
             mode_note="The transcript below contains partial summaries of a long meeting transcript.",
         )
 
+    def chat(self, *, message: str, context: str = "", model: str = "", language: str = "ko") -> str:
+        """회의 전사문과 요약문을 문맥으로 사용해 채팅 답변을 생성합니다.
+
+        브라우저는 질문과 함께 `context`를 보내므로, OpenAI가 현재 회의 내용 안에서
+        답을 찾도록 만들 수 있습니다. 문맥에 없는 내용은 추측하지 않도록 지시합니다.
+        """
+
+        if not message.strip():
+            raise RuntimeError("채팅 질문을 입력해 주세요.")
+
+        config = self._load_config()
+        client = self._get_client(config)
+        selected_model = self._resolve_model(config=config, selected_model=model)
+        response = client.responses.create(
+            model=selected_model,
+            instructions=(
+                "You are a helpful meeting assistant. Answer using the meeting context when provided. "
+                "Use the requested language. Do not invent facts; clearly say when the context does not contain the answer."
+            ),
+            input=(
+                f"Output language: {language.strip() or 'ko'}\n"
+                f"Meeting context:\n{context.strip() or '(No meeting context provided.)'}\n\n"
+                f"User question:\n{message.strip()}"
+            ),
+        )
+        answer = (getattr(response, "output_text", "") or "").strip()
+        if not answer:
+            raise RuntimeError("OpenAI 채팅 응답이 비어 있습니다.")
+        return answer
+
     def transcribe_and_summarize(
         self,
         *,
@@ -436,6 +496,7 @@ class MeetingSummaryService:
         meeting_title: str,
         summary_focus: str,
         language: str,
+        model: str = "",
     ) -> dict[str, str]:
         """전사와 요약을 순서대로 실행합니다."""
 
@@ -446,6 +507,7 @@ class MeetingSummaryService:
             meeting_title=meeting_title,
             summary_focus=summary_focus,
             language=language,
+            model=model,
         )
         return {"transcript": transcript, "summary": summary}
 
@@ -501,12 +563,18 @@ async def index(request: Request) -> HTMLResponse:
 
     ensure_config_file()
     config = load_openai_config()
+    try:
+        available_models = await run_in_threadpool(summary_service.list_models)
+    except Exception as exc:
+        log_exception_to_file(title="OpenAI model list loading failed", request=request, exc=exc)
+        available_models = []
     return templates.TemplateResponse(
         name="meeting_stt.html",
         context={
             "request": request,
             "page_title": "회의 녹음 요약",
-            "summary_model": config.get("summary_model", DEFAULT_CONFIG["summary_model"]),
+            "summary_model": config.get("summary_model", ""),
+            "available_models": available_models,
             "transcription_model": config.get("transcription_model", DEFAULT_CONFIG["transcription_model"]),
             "config_path": str(CONFIG_FILE_PATH),
         },
@@ -523,14 +591,27 @@ async def health() -> dict[str, Any]:
 
     ensure_config_file()
     config = load_openai_config()
+    try:
+        available_models = await run_in_threadpool(summary_service.list_models)
+    except Exception:
+        available_models = []
     return {
         "status": "ok",
         "mode": "record-upload-summary",
         "summary_model": config.get("summary_model"),
+        "available_models": available_models,
         "transcription_model": config.get("transcription_model"),
         "config_path": str(CONFIG_FILE_PATH),
         "api_key_configured": bool(config.get("api_key")),
     }
+
+
+@app.get("/api/models")
+async def models() -> dict[str, Any]:
+    """OpenAI에서 최신 모델 목록을 조회해 반환합니다."""
+
+    available_models = await run_in_threadpool(summary_service.list_models)
+    return {"models": available_models}
 
 
 async def save_upload_to_temp_file(audio_file: UploadFile) -> Path:
@@ -574,6 +655,7 @@ async def summarize_recording(
     transcription_prompt: str = "",
     meeting_title: str = "",
     summary_focus: str = "",
+    model: str = "",
 ) -> dict[str, str]:
     """화면에서 업로드한 녹음 파일을 전사하고 요약합니다.
 
@@ -582,6 +664,7 @@ async def summarize_recording(
     여기서도 `audio_file`이라는 이름으로 받습니다.
     """
 
+    # 업로드 파일은 요청이 끝나면 삭제하는 임시 파일로 처리합니다.
     temp_path: Path | None = None
     source_name = audio_file.filename or "meeting-recording.webm"
 
@@ -590,6 +673,8 @@ async def summarize_recording(
 
         # OpenAI SDK 호출은 동기 함수라 오래 걸릴 수 있습니다.
         # run_in_threadpool로 별도 작업 스레드에서 실행해 FastAPI 이벤트 루프가 막히지 않게 합니다.
+        # OpenAI 호출은 시간이 걸리는 동기 작업입니다.
+        # 별도 스레드에서 실행해 다른 브라우저 요청이 멈추지 않게 합니다.
         result = await run_in_threadpool(
             summary_service.transcribe_and_summarize,
             audio_path=temp_path,
@@ -598,6 +683,7 @@ async def summarize_recording(
             meeting_title=meeting_title.strip(),
             summary_focus=summary_focus.strip(),
             language=language.strip() or "ko",
+            model=model.strip(),
         )
         return {
             "type": "meeting_summary",
@@ -619,6 +705,47 @@ async def summarize_recording(
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
         await audio_file.close()
+
+
+@app.post("/api/chat")
+async def chat(request: Request) -> dict[str, str]:
+    """브라우저의 질문을 받아 OpenAI 답변을 JSON으로 돌려줍니다.
+
+    요청 순서:
+    1. JSON에서 질문, 문맥, 모델, 언어를 꺼냅니다.
+    2. 질문과 모델을 간단히 검사합니다.
+    3. 실제 OpenAI 호출은 작업 스레드에서 실행합니다.
+    4. JavaScript가 사용할 수 있도록 답변을 JSON으로 반환합니다.
+    """
+
+    try:
+        # JavaScript의 fetch()가 보낸 JSON 본문을 Python 딕셔너리로 읽습니다.
+        payload = await request.json()
+        message = str(payload.get("message", "")).strip()
+        context = str(payload.get("context", "")).strip()
+        model = str(payload.get("model", "")).strip()
+        language = str(payload.get("language", "ko")).strip() or "ko"
+        if not message:
+            raise HTTPException(status_code=400, detail="채팅 질문을 입력해 주세요.")
+        # 서버에서도 다시 검사해야 사용자가 개발자 도구로 임의의 모델명을 보내도
+        # 프로그램이 지원하지 않는 값을 그대로 OpenAI에 전달하지 않습니다.
+        if model:
+            available_models = await run_in_threadpool(summary_service.list_models)
+            if model not in available_models:
+                raise HTTPException(status_code=400, detail="OpenAI에서 조회되지 않은 모델입니다.")
+        answer = await run_in_threadpool(
+            summary_service.chat,
+            message=message,
+            context=context,
+            model=model,
+            language=language,
+        )
+        return {"type": "chat", "model": model, "answer": answer}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_exception_to_file(title="Meeting chat failed", request=request, exc=exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def main() -> None:

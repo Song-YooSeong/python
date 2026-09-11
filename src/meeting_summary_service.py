@@ -31,7 +31,7 @@ TRANSCRIPT_SUMMARY_CHUNK_CHARS = 40_000
 
 DEFAULT_CONFIG = {
     "api_key": "",
-    "summary_model": "gpt-5.2",
+    "summary_model": "",
     "transcription_model": "gpt-4o-mini-transcribe",
     "meeting_language": "ko",
 }
@@ -98,6 +98,31 @@ class MeetingSummaryService:
         if not api_key:
             raise RuntimeError(f"OpenAI API key가 없습니다. {self.config_path} 파일의 api_key에 값을 넣어주세요.")
         return OpenAI(api_key=api_key)
+
+    def list_models(self) -> list[str]:
+        """OpenAI 계정에서 사용할 수 있는 모델 ID를 최신 목록으로 가져옵니다."""
+
+        config = load_openai_config()
+        client = self._get_client(config)
+        models = client.models.list()
+        model_ids = {
+            str(getattr(model, "id", "")).strip()
+            for model in models.data
+        }
+        return sorted(model_id for model_id in model_ids if model_id)
+
+    def _resolve_model(self, *, config: dict[str, str], selected_model: str) -> str:
+        """사용자 선택 모델 또는 OpenAI에서 조회한 첫 모델을 결정합니다."""
+
+        if selected_model.strip():
+            return selected_model.strip()
+        configured_model = config.get("summary_model", "").strip()
+        if configured_model:
+            return configured_model
+        available_models = self.list_models()
+        if not available_models:
+            raise RuntimeError("OpenAI에서 사용할 수 있는 모델을 찾지 못했습니다.")
+        return available_models[0]
 
     def _find_ffmpeg(self) -> str:
         ffmpeg_path = shutil.which("ffmpeg")
@@ -185,12 +210,18 @@ class MeetingSummaryService:
                     transcript_parts.append(f"[Part {index}/{len(chunk_paths)}]\n{chunk_text}")
         return "\n\n".join(transcript_parts).strip()
 
-    def summarize_meeting(self, *, transcript: str, source_name: str, meeting_title: str, summary_focus: str, language: str) -> str:
+    def summarize_meeting(self, *, transcript: str, source_name: str, meeting_title: str, summary_focus: str, language: str, model: str = "") -> str:
+        """전사문을 OpenAI에 보내 회의자료 형식으로 요약합니다.
+
+        `model`이 비어 있으면 설정 파일의 기본 요약 모델을 사용합니다.
+        값이 있으면 화면에서 사용자가 선택한 모델을 우선 사용합니다.
+        """
         if not transcript:
             raise RuntimeError("전사 결과가 비어 있어 회의 요약을 만들 수 없습니다.")
         config = load_openai_config()
         client = self._get_client(config)
-        summary_model = config.get("summary_model") or DEFAULT_CONFIG["summary_model"]
+        # 우선순위: 화면에서 선택한 모델 -> 설정 파일의 모델 -> OpenAI 조회 결과의 첫 모델
+        summary_model = self._resolve_model(config=config, selected_model=model)
         title = meeting_title.strip() or Path(source_name).stem or "회의"
         focus = summary_focus.strip() or "핵심 논의, 결정 사항, 후속 조치 목록을 중심으로 정리"
         output_language = language.strip() or config.get("meeting_language") or "ko"
@@ -213,7 +244,43 @@ class MeetingSummaryService:
             mode_note="The transcript below contains partial summaries of a long meeting transcript.",
         )
 
-    def transcribe_and_summarize(self, *, audio_path: Path, source_name: str, transcription_prompt: str, meeting_title: str, summary_focus: str, language: str) -> dict[str, str]:
+    def chat(self, *, message: str, context: str = "", model: str = "", language: str = "ko") -> str:
+        """회의 요약/전사문을 참고해 사용자의 질문에 답합니다.
+
+        이 함수는 화면 자체를 알지 못합니다. 질문과 회의 문맥을 문자열로 받아
+        OpenAI에 전달하고, 답변 문자열만 반환하므로 Windows 화면과 웹 화면에서
+        같은 기능을 재사용할 수 있습니다.
+        """
+
+        if not message.strip():
+            raise RuntimeError("채팅 질문을 입력해 주세요.")
+
+        config = load_openai_config()
+        client = self._get_client(config)
+        # 채팅도 요약과 같은 모델 선택 상자를 사용합니다.
+        selected_model = self._resolve_model(config=config, selected_model=model)
+        response = client.responses.create(
+            model=selected_model,
+            instructions=(
+                "You are a helpful meeting assistant. Answer using the meeting context when provided. "
+                "Use the requested language. Do not invent facts; clearly say when the context does not contain the answer."
+            ),
+            input=(
+                f"Output language: {language.strip() or 'ko'}\n"
+                f"Meeting context:\n{context.strip() or '(No meeting context provided.)'}\n\n"
+                f"User question:\n{message.strip()}"
+            ),
+        )
+        answer = (getattr(response, "output_text", "") or "").strip()
+        if not answer:
+            raise RuntimeError("OpenAI 채팅 응답이 비어 있습니다.")
+        return answer
+
+    def transcribe_and_summarize(self, *, audio_path: Path, source_name: str, transcription_prompt: str, meeting_title: str, summary_focus: str, language: str, model: str = "") -> dict[str, str]:
+        """음성 전사와 회의 요약을 순서대로 실행합니다."""
+
+        # 먼저 음성을 글자로 바꾸고, 그 결과를 요약 함수에 넘깁니다.
+        # 두 작업을 하나의 메서드로 묶어 화면에서는 한 번만 호출하면 됩니다.
         transcript = self.transcribe_audio(audio_path, source_name, transcription_prompt, language)
-        summary = self.summarize_meeting(transcript=transcript, source_name=source_name, meeting_title=meeting_title, summary_focus=summary_focus, language=language)
+        summary = self.summarize_meeting(transcript=transcript, source_name=source_name, meeting_title=meeting_title, summary_focus=summary_focus, language=language, model=model)
         return {"transcript": transcript, "summary": summary}

@@ -249,6 +249,76 @@ button:disabled {
     white-space: pre-wrap;
 }
 
+.raw-markdown-data {
+    display: none;
+}
+
+.markdown-output {
+    min-height: 260px;
+    max-height: 620px;
+    overflow-y: auto;
+    padding: 22px 24px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--ink);
+    line-height: 1.75;
+}
+
+.markdown-output h1,
+.markdown-output h2,
+.markdown-output h3,
+.markdown-output h4,
+.markdown-output h5,
+.markdown-output h6 {
+    margin: 0 0 10px;
+    line-height: 1.3;
+}
+
+.markdown-output p,
+.chat-message p {
+    margin: 0 0 12px;
+}
+
+.markdown-output ul,
+.markdown-output ol,
+.chat-message ul,
+.chat-message ol {
+    margin: 0 0 14px;
+    padding-left: 24px;
+}
+
+.markdown-output code,
+.chat-message code {
+    padding: 2px 5px;
+    border-radius: 4px;
+    background: #eef2f4;
+    font-family: Consolas, monospace;
+    font-size: 0.92em;
+}
+
+.markdown-output pre,
+.chat-message pre {
+    overflow-x: auto;
+    margin: 14px 0;
+    padding: 14px;
+    border-radius: 6px;
+    background: #1f2933;
+    color: #f4f7f8;
+}
+
+.markdown-output pre code,
+.chat-message pre code {
+    padding: 0;
+    background: transparent;
+    color: inherit;
+}
+
+.result-placeholder {
+    margin: 0;
+    color: var(--muted);
+}
+
 .transcript-text {
     min-height: 380px;
 }
@@ -258,6 +328,64 @@ button:disabled {
     background: #fff8f8;
     border-color: #efc2c4;
     color: #6d2b2e;
+}
+
+.chat-log {
+    /* 여러 질문과 답변이 쌓이므로 높이를 제한하고 안쪽만 스크롤합니다. */
+    min-height: 180px;
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #f8fafb;
+}
+
+.chat-empty {
+    margin: 0;
+    color: var(--muted);
+}
+
+.chat-message {
+    max-width: 86%;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    line-height: 1.6;
+}
+
+.chat-message.user {
+    /* 사용자의 질문은 오른쪽에 배치해 답변과 쉽게 구분합니다. */
+    margin-left: auto;
+    background: #d9f1ed;
+}
+
+.chat-message.assistant {
+    /* OpenAI 답변은 왼쪽에 표시합니다. */
+    background: #fff;
+    border: 1px solid var(--line);
+}
+
+.chat-message p {
+    white-space: pre-wrap;
+}
+
+.chat-input-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 14px;
+    align-items: flex-end;
+}
+
+.chat-input-row textarea {
+    /* 질문이 길어질 수 있어 여러 줄 입력을 허용합니다. */
+    flex: 1;
+    min-height: 52px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: inherit;
+    resize: vertical;
 }
 
 /* 모바일 화면에서는 패널 여백을 줄이고, 넓은 입력칸도 한 줄 폭으로 내려줍니다. */
@@ -279,5 +407,10 @@ button:disabled {
 
     .field.wide {
         grid-column: auto;
+    }
+
+    .chat-input-row {
+        flex-direction: column;
+        align-items: stretch;
     }
 }

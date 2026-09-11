@@ -12,10 +12,12 @@ const audioFileInput = document.getElementById("audioFileInput");
 const copySummaryButton = document.getElementById("copySummaryButton");
 const clearSummaryButton = document.getElementById("clearSummaryButton");
 const clearErrorButton = document.getElementById("clearErrorButton");
+const sendChatButton = document.getElementById("sendChatButton");
 const errorPanel = document.getElementById("errorPanel");
 const statusBadge = document.getElementById("statusBadge");
 const statusText = document.getElementById("statusText");
 const summaryText = document.getElementById("summaryText");
+const summaryMarkdown = document.getElementById("summaryMarkdown");
 const transcriptText = document.getElementById("transcriptText");
 const summaryMeta = document.getElementById("summaryMeta");
 const transcriptMeta = document.getElementById("transcriptMeta");
@@ -26,6 +28,13 @@ const languageInput = document.getElementById("languageInput");
 const promptInput = document.getElementById("promptInput");
 const meetingTitleInput = document.getElementById("meetingTitleInput");
 const summaryFocusInput = document.getElementById("summaryFocusInput");
+const modelInput = document.getElementById("modelInput");
+const chatInput = document.getElementById("chatInput");
+const chatText = document.getElementById("chatText");
+const chatMeta = document.getElementById("chatMeta");
+
+// HTML의 id와 JavaScript 변수를 연결합니다.
+// 예를 들어 modelInput.value를 읽으면 사용자가 선택한 모델명을 얻을 수 있습니다.
 
 // ---------------------------------------------------------------------------
 // 녹음 상태를 기억하는 전역 변수
@@ -38,6 +47,90 @@ let mediaStream = null;
 let recordedChunks = [];
 let recorderMimeType = "";
 let errorCount = 0;
+
+function escapeHtml(text) {
+    // OpenAI 응답을 그대로 innerHTML에 넣으면 HTML/스크립트가 실행될 수 있습니다.
+    // 먼저 특수문자를 이스케이프한 뒤 우리가 만든 Markdown 태그만 추가합니다.
+    return text
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+function formatMarkdownInline(text) {
+    return text
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/__(.+?)__/g, "<strong>$1</strong>")
+        .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
+        .replace(/_([^_\n]+)_/g, "<em>$1</em>");
+}
+
+function markdownToHtml(markdown) {
+    // 회의 요약에서 자주 사용하는 제목, 목록, 인용, 코드 블록만 우선 지원합니다.
+    // 변환 전에 escapeHtml()을 실행하므로 응답 내용은 안전하게 표시됩니다.
+    const lines = escapeHtml(markdown).replaceAll("\r", "").split("\n");
+    const html = [];
+    let inCodeBlock = false;
+    let codeLines = [];
+    let listType = "";
+
+    const closeList = () => {
+        if (listType) {
+            html.push(`</${listType}>`);
+            listType = "";
+        }
+    };
+
+    for (const line of lines) {
+        if (line.trim().startsWith("```")) {
+            if (inCodeBlock) {
+                html.push(`<pre><code>${codeLines.join("\n")}</code></pre>`);
+                codeLines = [];
+                inCodeBlock = false;
+            } else {
+                closeList();
+                inCodeBlock = true;
+            }
+            continue;
+        }
+        if (inCodeBlock) {
+            codeLines.push(line);
+            continue;
+        }
+        if (!line.trim()) {
+            closeList();
+            continue;
+        }
+
+        const heading = line.match(/^(#{1,6})\s+(.+)$/);
+        const unorderedItem = line.match(/^\s*[-*]\s+(.+)$/);
+        const orderedItem = line.match(/^\s*\d+[.)]\s+(.+)$/);
+        if (heading) {
+            closeList();
+            const level = heading[1].length;
+            html.push(`<h${level}>${formatMarkdownInline(heading[2])}</h${level}>`);
+        } else if (unorderedItem || orderedItem) {
+            const nextListType = unorderedItem ? "ul" : "ol";
+            if (listType !== nextListType) {
+                closeList();
+                listType = nextListType;
+                html.push(`<${listType}>`);
+            }
+            html.push(`<li>${formatMarkdownInline((unorderedItem || orderedItem)[1])}</li>`);
+        } else {
+            closeList();
+            html.push(`<p>${formatMarkdownInline(line)}</p>`);
+        }
+    }
+    if (inCodeBlock) {
+        html.push(`<pre><code>${codeLines.join("\n")}</code></pre>`);
+    }
+    closeList();
+    return html.join("");
+}
 
 function showErrorPanel() {
     errorPanel.classList.remove("hidden");
@@ -118,9 +211,11 @@ function clearErrors() {
 
 function clearResults() {
     summaryText.value = "";
+    summaryMarkdown.innerHTML = '<p class="result-placeholder">녹음 파일을 업로드하면 요약 결과가 표시됩니다.</p>';
     transcriptText.value = "";
     summaryMeta.textContent = "요약 결과가 여기에 표시됩니다.";
     transcriptMeta.textContent = "업로드한 녹음 파일의 전사 원문이 표시됩니다.";
+    // 채팅 기록은 회의 결과와 별도로 유지하므로 여기서는 지우지 않습니다.
 }
 
 async function copySummary() {
@@ -255,6 +350,9 @@ async function summarizeSelectedFile() {
         formData.append("transcription_prompt", promptInput.value.trim());
         formData.append("meeting_title", meetingTitleInput.value.trim());
         formData.append("summary_focus", summaryFocusInput.value.trim());
+        // 선택한 모델도 파일과 함께 서버로 전송합니다.
+        // 서버는 이 값을 요약 단계에서 OpenAI model 인자로 사용합니다.
+        formData.append("model", modelInput.value);
 
         const response = await fetch(window.MEETING_APP_CONFIG.summarizeUrl, {
             method: "POST",
@@ -267,6 +365,7 @@ async function summarizeSelectedFile() {
         }
 
         summaryText.value = payload.summary || "";
+        summaryMarkdown.innerHTML = markdownToHtml(summaryText.value);
         transcriptText.value = payload.transcript || "";
         summaryMeta.textContent = `${payload.source_name || file.name} 파일의 회의자료 요약을 완료했습니다.`;
         transcriptMeta.textContent = "전사 원문 생성을 완료했습니다.";
@@ -278,6 +377,64 @@ async function summarizeSelectedFile() {
         setStatus("error", "회의자료 요약 중 오류가 발생했습니다.");
     } finally {
         uploadSummaryButton.disabled = false;
+    }
+}
+
+function appendChatMessage(role, text) {
+    // innerHTML 대신 textContent를 사용해 답변 안의 HTML이 실행되지 않도록 합니다.
+    const message = document.createElement("div");
+    message.className = `chat-message ${role}`;
+    const label = document.createElement("strong");
+    label.textContent = role === "user" ? "나" : "OpenAI";
+    const content = document.createElement("p");
+    content.innerHTML = markdownToHtml(text);
+    message.append(label, content);
+    const emptyMessage = chatText.querySelector(".chat-empty");
+    if (emptyMessage) {
+        emptyMessage.remove();
+    }
+    chatText.appendChild(message);
+    chatText.scrollTop = chatText.scrollHeight;
+}
+
+async function sendChatMessage() {
+    const message = chatInput.value.trim();
+    if (!message) {
+        setStatus("idle", "질문을 입력해 주세요.");
+        return;
+    }
+
+    // 같은 질문을 여러 번 보내지 않도록 응답을 기다리는 동안 버튼을 잠급니다.
+    sendChatButton.disabled = true;
+    appendChatMessage("user", message);
+    chatInput.value = "";
+    setStatus("sending", "회의 내용을 바탕으로 답변을 생성하고 있습니다.");
+    try {
+        const response = await fetch(window.MEETING_APP_CONFIG.chatUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                message,
+                model: modelInput.value,
+                language: languageInput.value.trim() || "ko",
+                // 현재 화면에 표시된 요약과 원문을 하나의 문맥으로 만들어 보냅니다.
+                context: [summaryText.value.trim(), transcriptText.value.trim()].filter(Boolean).join("\n\n"),
+            }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.detail || "채팅 응답을 생성하지 못했습니다.");
+        }
+        // 서버 응답의 answer를 대화창에 추가합니다.
+        appendChatMessage("assistant", payload.answer || "응답이 비어 있습니다.");
+        chatMeta.textContent = `${modelInput.value} 모델로 답변했습니다.`;
+        setStatus("idle", "채팅 답변을 받았습니다.");
+    } catch (error) {
+        appendError("채팅 실패", error.message || "채팅 중 오류가 발생했습니다.");
+        setStatus("error", "채팅 중 오류가 발생했습니다.");
+    } finally {
+        sendChatButton.disabled = false;
+        chatInput.focus();
     }
 }
 
@@ -293,6 +450,14 @@ uploadSummaryButton.addEventListener("click", summarizeSelectedFile);
 copySummaryButton.addEventListener("click", copySummary);
 clearSummaryButton.addEventListener("click", clearResults);
 clearErrorButton.addEventListener("click", clearErrors);
+sendChatButton.addEventListener("click", sendChatMessage);
+chatInput.addEventListener("keydown", (event) => {
+    // Shift를 누르지 않은 Enter만 전송으로 사용합니다.
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage();
+    }
+});
 
 window.addEventListener("beforeunload", () => {
     // 사용자가 페이지를 닫거나 새로고침할 때 녹음 중이면 마이크 사용을 정리합니다.
