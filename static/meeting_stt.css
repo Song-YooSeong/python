@@ -3,15 +3,21 @@
    CSS 변수(--bg, --panel 등)를 사용하면 같은 색을 여러 곳에서 재사용하기 쉽습니다.
 -------------------------------------------------------------------------- */
 :root {
-    --bg: #f6f7f9;
-    --panel: #ffffff;
-    --ink: #1d2730;
-    --muted: #62707f;
-    --line: #d9e0e7;
-    --accent: #0d766f;
+    --bg: #f4f7fb;
+    --panel: rgba(255, 255, 255, 0.92);
+    --panel-strong: #ffffff;
+    --ink: #172233;
+    --muted: #5d6c7d;
+    --line: #e4ebf3;
+    --accent: #0f766e;
     --accent-dark: #0b5f59;
+    --primary-soft: #edf4ff;
+    --primary-strong: #1d4ed8;
+    --warning-soft: #fff7df;
+    --warning-strong: #9d5d00;
     --warning: #b42318;
-    --shadow: 0 10px 30px rgba(29, 39, 48, 0.08);
+    --shadow: 0 18px 40px rgba(15, 23, 42, 0.07);
+    --shadow-soft: 0 12px 28px rgba(15, 23, 42, 0.045);
 }
 
 * {
@@ -23,48 +29,82 @@ body {
     min-height: 100vh;
     font-family: "Segoe UI", "Malgun Gothic", sans-serif;
     color: var(--ink);
-    background: var(--bg);
+    background:
+        radial-gradient(circle at top left, rgba(17, 94, 89, 0.05), transparent 26%),
+        radial-gradient(circle at top right, rgba(29, 78, 216, 0.045), transparent 22%),
+        linear-gradient(180deg, #f7f9fc 0%, var(--bg) 100%);
 }
 
 /* main.page는 화면 전체 내용의 최대 폭과 여백을 담당합니다. */
 .page {
-    max-width: 1080px;
+    max-width: 1180px;
     margin: 0 auto;
-    padding: 40px 20px 56px;
+    padding: 34px 20px 56px;
 }
 
 .hero {
-    margin-bottom: 24px;
+    margin-bottom: 20px;
+    padding: 8px 4px 10px;
+}
+
+.hero-header {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 28px;
+}
+
+.hero-copy {
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .eyebrow {
     margin: 0 0 8px;
     color: var(--accent);
-    font-size: 0.9rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
+    opacity: 0.95;
 }
 
 .hero h1 {
     margin: 0;
-    font-size: clamp(2rem, 4vw, 3.6rem);
-    line-height: 1.05;
+    font-size: clamp(2.1rem, 3.7vw, 3.2rem);
+    line-height: 1.04;
+    letter-spacing: -0.05em;
+    color: #101b2b;
 }
 
 .subtitle {
-    max-width: 760px;
+    margin: 0;
+    max-width: 560px;
     color: var(--muted);
-    font-size: 1.05rem;
-    line-height: 1.65;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    letter-spacing: -0.01em;
+    padding-top: 10px;
 }
 
 /* panel은 입력 영역, 업로드 영역, 결과 영역에 공통으로 쓰는 흰색 박스입니다. */
 .panel {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    box-shadow: var(--shadow);
+    position: relative;
+    background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.96));
+    border: 1px solid rgba(227, 234, 243, 0.9);
+    border-radius: 18px;
+    box-shadow: var(--shadow-soft);
+    backdrop-filter: blur(4px);
+    overflow: hidden;
+}
+
+.panel::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(90deg, rgba(15,118,110,0.8), rgba(29,78,216,0.7), rgba(255,193,74,0.75));
 }
 
 .hidden {
@@ -109,10 +149,19 @@ body {
 .readonly strong {
     min-height: 48px;
     padding: 12px 14px;
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid var(--line);
-    background: #fff;
+    background: linear-gradient(180deg, #ffffff, #f9fbfd);
     font: inherit;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.field input:focus,
+.field select:focus,
+.chat-input-row textarea:focus {
+    outline: none;
+    border-color: rgba(29, 78, 216, 0.25);
+    box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.06);
 }
 
 .readonly strong {
@@ -131,46 +180,121 @@ body {
     flex: 1 1 320px;
     min-height: 48px;
     padding: 10px 14px;
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid var(--line);
-    background: #fff;
+    background: linear-gradient(180deg, #ffffff, #f9fbfd);
     font: inherit;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.file-input:focus {
+    outline: none;
+    border-color: rgba(29, 78, 216, 0.25);
+    box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.06);
 }
 
 .actions,
 .panel-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 10px;
 }
 
 .actions {
     margin-bottom: 18px;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(240, 245, 250, 0.96));
+    border: 1px solid rgba(227, 234, 243, 0.9);
+    border-radius: 12px;
 }
 
 button {
-    border: 0;
-    border-radius: 8px;
-    padding: 13px 20px;
+    border: 1px solid rgba(15, 23, 42, 0.04);
+    border-radius: 10px;
+    padding: 11px 18px;
     font: inherit;
     font-weight: 700;
     cursor: pointer;
-    background: #e8edf2;
+    background: linear-gradient(180deg, #f8fbff, #ecf3f9);
     color: var(--ink);
+    letter-spacing: -0.01em;
+    transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+}
+
+button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 15px rgba(15, 23, 42, 0.05);
+}
+
+button:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: inset 0 2px 6px rgba(15, 23, 42, 0.07);
 }
 
 button.primary {
-    background: var(--accent);
+    background: linear-gradient(135deg, var(--accent), var(--accent-dark));
     color: #fff;
+    box-shadow: 0 10px 20px rgba(15, 118, 110, 0.22);
 }
 
-button.primary:hover {
-    background: var(--accent-dark);
+button.primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--accent-dark), #0a524d);
+}
+
+button.is-selected {
+    background: linear-gradient(135deg, #eef5ff, #deebff);
+    color: var(--primary-strong);
+    border-color: rgba(29, 78, 216, 0.25);
+    box-shadow: inset 0 0 0 1px rgba(29, 78, 216, 0.12), 0 0 0 4px rgba(29, 78, 216, 0.04);
+}
+
+button.is-working {
+    background: linear-gradient(135deg, #fff5d6, #ffe7a4);
+    color: var(--warning-strong);
+    border-color: rgba(163, 99, 0, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(163, 99, 0, 0.08), 0 0 0 4px rgba(255, 193, 74, 0.14);
+    animation: pulseWorking 1.3s ease-in-out infinite alternate;
+}
+
+button.primary.is-selected {
+    background: linear-gradient(135deg, #eef5ff, #deebff);
+    color: var(--primary-strong);
+    border-color: rgba(29, 78, 216, 0.25);
+}
+
+button.primary.is-working {
+    background: linear-gradient(135deg, #f7b500, #f59e0b);
+    color: #fff;
+    border-color: rgba(163, 99, 0, 0.2);
 }
 
 button:disabled {
-    opacity: 0.55;
+    opacity: 0.58;
     cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+@keyframes pulseWorking {
+    from {
+        box-shadow: inset 0 0 0 1px rgba(163, 99, 0, 0.08), 0 0 0 2px rgba(255, 193, 74, 0.08);
+    }
+    to {
+        box-shadow: inset 0 0 0 1px rgba(163, 99, 0, 0.2), 0 0 0 7px rgba(255, 193, 74, 0.18);
+    }
+}
+
+@media (max-width: 720px) {
+    .hero-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .subtitle {
+        max-width: 100%;
+        font-size: 0.86rem;
+    }
 }
 
 .status-row {
@@ -178,14 +302,16 @@ button:disabled {
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
+    margin-top: 4px;
 }
 
 /* JavaScript의 setStatus()가 idle/recording/sending/error class를 바꿔 색상을 제어합니다. */
 .badge {
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-size: 0.9rem;
+    padding: 7px 12px;
+    border-radius: 999px;
+    font-size: 0.78rem;
     font-weight: 700;
+    letter-spacing: 0.02em;
 }
 
 .badge.idle {
@@ -213,6 +339,13 @@ button:disabled {
     gap: 12px;
     align-items: flex-start;
     margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(227, 234, 243, 0.9);
+}
+
+.panel-header h2 {
+    font-size: 1.16rem;
+    letter-spacing: -0.02em;
 }
 
 .panel-header h2,
@@ -239,9 +372,9 @@ button:disabled {
     width: 100%;
     min-height: 260px;
     padding: 18px;
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid var(--line);
-    background: #fff;
+    background: linear-gradient(180deg, #ffffff, #f9fbfd);
     color: var(--ink);
     resize: vertical;
     font: inherit;
@@ -259,8 +392,8 @@ button:disabled {
     overflow-y: auto;
     padding: 22px 24px;
     border: 1px solid var(--line);
-    border-radius: 8px;
-    background: #fff;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #ffffff, #f9fbfd);
     color: var(--ink);
     line-height: 1.75;
 }
@@ -337,8 +470,8 @@ button:disabled {
     overflow-y: auto;
     padding: 16px;
     border: 1px solid var(--line);
-    border-radius: 8px;
-    background: #f8fafb;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #f9fbfe, #f5f8fc);
 }
 
 .chat-empty {
@@ -350,14 +483,15 @@ button:disabled {
     max-width: 86%;
     margin-bottom: 14px;
     padding: 12px 14px;
-    border-radius: 8px;
+    border-radius: 12px;
     line-height: 1.6;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.02);
 }
 
 .chat-message.user {
     /* 사용자의 질문은 오른쪽에 배치해 답변과 쉽게 구분합니다. */
     margin-left: auto;
-    background: #d9f1ed;
+    background: linear-gradient(135deg, #dff7f2, #dcecff);
 }
 
 .chat-message.assistant {
@@ -383,9 +517,11 @@ button:disabled {
     min-height: 52px;
     padding: 12px 14px;
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: 10px;
     font: inherit;
+    background: linear-gradient(180deg, #ffffff, #f9fbfd);
     resize: vertical;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 /* 모바일 화면에서는 패널 여백을 줄이고, 넓은 입력칸도 한 줄 폭으로 내려줍니다. */

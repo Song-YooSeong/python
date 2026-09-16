@@ -153,6 +153,25 @@ function setStatus(state, message) {
     statusText.textContent = message;
 }
 
+function setButtonMode(button, { selected = false, working = false } = {}) {
+    if (!button) {
+        return;
+    }
+
+    button.classList.toggle("is-selected", selected);
+    button.classList.toggle("is-working", working);
+    button.setAttribute("aria-pressed", String(selected));
+}
+
+function clearButtonSelection(exceptButton = null) {
+    [startButton, stopButton, saveRecordingButton, downloadSummaryButton, uploadSummaryButton, copySummaryButton, clearSummaryButton, clearErrorButton, sendChatButton].forEach((button) => {
+        if (!button || button === exceptButton) {
+            return;
+        }
+        setButtonMode(button, { selected: false, working: false });
+    });
+}
+
 function formatNow() {
     return new Date().toLocaleTimeString("ko-KR", {
         hour: "2-digit",
@@ -307,6 +326,8 @@ async function startRecording() {
             mediaRecorder = null;
             startButton.disabled = false;
             stopButton.disabled = true;
+            setButtonMode(startButton, { selected: false, working: false });
+            setButtonMode(stopButton, { selected: false, working: false });
             setStatus("idle", "녹음을 중지했습니다. 녹음 파일을 저장한 뒤 업로드해 주세요.");
         }, { once: true });
 
@@ -315,6 +336,9 @@ async function startRecording() {
         startButton.disabled = true;
         stopButton.disabled = false;
         saveRecordingButton.disabled = true;
+        clearButtonSelection(startButton);
+        setButtonMode(startButton, { selected: true, working: true });
+        setButtonMode(stopButton, { selected: true, working: false });
         setStatus("recording", "회의 음성을 녹음하고 있습니다.");
     } catch (error) {
         appendError("녹음 시작 실패", error.message || "녹음을 시작하지 못했습니다.");
@@ -338,6 +362,8 @@ async function summarizeSelectedFile() {
     }
 
     uploadSummaryButton.disabled = true;
+    clearButtonSelection(uploadSummaryButton);
+    setButtonMode(uploadSummaryButton, { selected: true, working: true });
     setStatus("sending", "녹음 파일을 업로드하고 전사와 요약을 생성하고 있습니다.");
     uploadMeta.textContent = `${file.name} 파일을 처리하고 있습니다.`;
 
@@ -374,9 +400,11 @@ async function summarizeSelectedFile() {
     } catch (error) {
         appendError("회의자료 요약 실패", error.message || "업로드 파일 처리에 실패했습니다.");
         uploadMeta.textContent = "녹음 파일을 선택하면 회의 전사와 요약을 생성합니다.";
+        setButtonMode(uploadSummaryButton, { selected: false, working: false });
         setStatus("error", "회의자료 요약 중 오류가 발생했습니다.");
     } finally {
         uploadSummaryButton.disabled = false;
+        setButtonMode(uploadSummaryButton, { selected: false, working: false });
     }
 }
 
@@ -406,6 +434,8 @@ async function sendChatMessage() {
 
     // 같은 질문을 여러 번 보내지 않도록 응답을 기다리는 동안 버튼을 잠급니다.
     sendChatButton.disabled = true;
+    clearButtonSelection(sendChatButton);
+    setButtonMode(sendChatButton, { selected: true, working: true });
     appendChatMessage("user", message);
     chatInput.value = "";
     setStatus("sending", "회의 내용을 바탕으로 답변을 생성하고 있습니다.");
@@ -431,9 +461,11 @@ async function sendChatMessage() {
         setStatus("idle", "채팅 답변을 받았습니다.");
     } catch (error) {
         appendError("채팅 실패", error.message || "채팅 중 오류가 발생했습니다.");
+        setButtonMode(sendChatButton, { selected: false, working: false });
         setStatus("error", "채팅 중 오류가 발생했습니다.");
     } finally {
         sendChatButton.disabled = false;
+        setButtonMode(sendChatButton, { selected: false, working: false });
         chatInput.focus();
     }
 }

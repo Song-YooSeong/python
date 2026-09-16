@@ -15,12 +15,16 @@
     <main class="page">
         <!-- 화면 상단의 제목 영역입니다. 사용자가 이 앱의 목적을 처음 파악하는 곳입니다. -->
         <section class="hero">
-            <p class="eyebrow">OpenAI API Meeting Assistant</p>
-            <h1>{{ page_title }}</h1>
-            <p class="subtitle">
-                회의 음성을 브라우저에서 녹음해 파일로 저장한 뒤, 저장한 녹음 파일을 업로드하면
-                OpenAI API가 전사문과 회의자료 요약을 생성합니다.
-            </p>
+            <div class="hero-header">
+                <div class="hero-copy">
+                    <p class="eyebrow">OpenAI API Meeting Assistant</p>
+                    <h1>{{ page_title }}</h1>
+                </div>
+                <p class="subtitle">
+                    회의 음성을 브라우저에서 녹음해 파일로 저장한 뒤, 저장한 녹음 파일을 업로드하면
+                    OpenAI API가 전사문과 회의자료 요약을 생성합니다.
+                </p>
+            </div>
         </section>
 
         <!-- 녹음과 요약에 필요한 입력값을 받는 조작 영역입니다. -->
