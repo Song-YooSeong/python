@@ -1,0 +1,78 @@
+{% extends "board_base.html" %}
+{% block title %}글 목록 - 게시판 샘플{% endblock %}
+
+{% block content %}
+{# 검색 창: GET 방식이라 검색 결과 주소를 그대로 복사해 쓸 수 있습니다. #}
+<form class="search-bar" method="get" action="/">
+    <select name="field" aria-label="검색 종류">
+        {% for value, label in search_fields.items() %}
+        <option value="{{ value }}" {% if value == field %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+    </select>
+    <input type="text" name="keyword" value="{{ keyword }}" placeholder="검색어를 입력하세요" maxlength="100">
+    <button type="submit" class="btn">검색</button>
+    {% if keyword %}
+    <a class="btn btn-plain" href="/">검색 해제</a>
+    {% endif %}
+</form>
+
+<div class="list-info">
+    <span>전체 {{ total_count }}건{% if keyword %} (검색: {{ search_fields[field] }} = "{{ keyword }}"){% endif %}</span>
+    <span>{{ page }} / {{ total_pages }} 페이지</span>
+</div>
+
+<table class="board-table">
+    <thead>
+        <tr>
+            <th class="col-no">번호</th>
+            <th class="col-title">제목</th>
+            <th class="col-writer">작성자</th>
+            <th class="col-date">작성일</th>
+            <th class="col-count">조회</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for post in posts %}
+        <tr>
+            <td class="col-no">{{ start_number - loop.index0 }}</td>
+            <td class="col-title">
+                {# 상세에서 목록으로 돌아올 때 지금 보던 페이지와 검색어를 유지합니다. #}
+                <a href="/posts/{{ post.id }}?page={{ page }}&keyword={{ keyword }}&field={{ field }}">{{ post.title }}</a>
+                {% if post.comment_count %}
+                <span class="comment-badge">[{{ post.comment_count }}]</span>
+                {% endif %}
+            </td>
+            <td class="col-writer">{{ post.writer }}</td>
+            <td class="col-date">{{ post.created_at[:10] }}</td>
+            <td class="col-count">{{ post.view_count }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="5" class="empty">
+                {% if keyword %}검색 결과가 없습니다.{% else %}등록된 글이 없습니다. 첫 글을 남겨 보세요.{% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="list-footer">
+    {# 페이지 번호. 검색 상태를 유지하도록 keyword/field를 함께 넘깁니다. #}
+    <nav class="pager">
+        {% if page > 1 %}
+        <a href="/?page={{ page - 1 }}&keyword={{ keyword }}&field={{ field }}">이전</a>
+        {% endif %}
+        {% for number in page_numbers %}
+            {% if number == page %}
+            <strong class="current">{{ number }}</strong>
+            {% else %}
+            <a href="/?page={{ number }}&keyword={{ keyword }}&field={{ field }}">{{ number }}</a>
+            {% endif %}
+        {% endfor %}
+        {% if page < total_pages %}
+        <a href="/?page={{ page + 1 }}&keyword={{ keyword }}&field={{ field }}">다음</a>
+        {% endif %}
+    </nav>
+    <a class="btn btn-primary" href="/posts/new">글쓰기</a>
+</div>
+{% endblock %}

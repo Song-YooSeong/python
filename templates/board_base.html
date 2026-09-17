@@ -1,0 +1,26 @@
+{# 게시판 화면의 공통 틀입니다. 목록/상세/글쓰기 화면이 이 파일을 상속합니다. #}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}게시판 샘플{% endblock %}</title>
+    <link rel="stylesheet" href="/static/board.css">
+</head>
+<body>
+    <div class="page">
+        <header class="page-header">
+            <h1><a href="/">게시판 샘플</a></h1>
+            <p class="page-desc">FastAPI + SQLite로 만든 기본 게시판입니다. 글쓰기, 수정, 삭제, 검색, 댓글을 사용할 수 있습니다.</p>
+        </header>
+
+        {% if error %}
+        <p class="alert">{{ error }}</p>
+        {% endif %}
+
+        <main>
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+</body>
+</html>

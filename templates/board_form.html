@@ -1,0 +1,47 @@
+{% extends "board_base.html" %}
+{% block title %}{% if mode == 'edit' %}글 수정{% else %}글쓰기{% endif %} - 게시판 샘플{% endblock %}
+
+{% block content %}
+{# 글쓰기와 수정이 같은 화면을 씁니다. mode 값으로 보낼 주소와 안내 문구만 바꿉니다. #}
+<h2 class="form-title">{% if mode == 'edit' %}글 수정{% else %}글쓰기{% endif %}</h2>
+
+<form class="post-form" method="post"
+      action="{% if mode == 'edit' %}/posts/{{ post.id }}/edit{% else %}/posts{% endif %}">
+    <label>
+        <span>제목</span>
+        <input type="text" name="title" value="{{ post.title if post else '' }}" required maxlength="200"
+               placeholder="제목을 입력하세요">
+    </label>
+
+    {% if mode == 'edit' %}
+    {# 수정 화면에서는 작성자를 바꿀 수 없게 보여 주기만 합니다. #}
+    <label>
+        <span>작성자</span>
+        <input type="text" value="{{ post.writer }}" disabled>
+    </label>
+    {% else %}
+    <label>
+        <span>작성자</span>
+        <input type="text" name="writer" required maxlength="40" placeholder="이름을 입력하세요">
+    </label>
+    {% endif %}
+
+    <label>
+        <span>비밀번호</span>
+        <input type="password" name="password" required maxlength="100"
+               placeholder="{% if mode == 'edit' %}글 작성 시 입력한 비밀번호{% else %}수정·삭제할 때 필요합니다{% endif %}">
+    </label>
+
+    <label>
+        <span>내용</span>
+        <textarea name="content" rows="14" required maxlength="10000"
+                  placeholder="내용을 입력하세요">{{ post.content if post else '' }}</textarea>
+    </label>
+
+    <div class="form-actions">
+        <a class="btn btn-plain"
+           href="{% if mode == 'edit' %}/posts/{{ post.id }}{% else %}/{% endif %}">취소</a>
+        <button type="submit" class="btn btn-primary">{% if mode == 'edit' %}수정 완료{% else %}등록{% endif %}</button>
+    </div>
+</form>
+{% endblock %}

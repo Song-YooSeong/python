@@ -1,0 +1,60 @@
+{% extends "board_base.html" %}
+{% block title %}{{ post.title }} - 게시판 샘플{% endblock %}
+
+{% block content %}
+<article class="post">
+    <h2 class="post-title">{{ post.title }}</h2>
+    <div class="post-meta">
+        <span>작성자 {{ post.writer }}</span>
+        <span>작성일 {{ post.created_at }}</span>
+        {% if post.updated_at %}
+        <span>수정일 {{ post.updated_at }}</span>
+        {% endif %}
+        <span>조회 {{ post.view_count }}</span>
+    </div>
+    {# 줄바꿈은 CSS(white-space: pre-wrap)로 살립니다. HTML 태그는 Jinja2가 자동으로 막아 줍니다. #}
+    <div class="post-content">{{ post.content }}</div>
+</article>
+
+<div class="post-actions">
+    <a class="btn btn-plain" href="/?page={{ page }}&keyword={{ keyword }}&field={{ field }}">목록</a>
+    <a class="btn" href="/posts/{{ post.id }}/edit">수정</a>
+    {# 삭제는 되돌릴 수 없으므로 비밀번호를 받고 한 번 더 확인합니다. #}
+    <form class="inline-form" method="post" action="/posts/{{ post.id }}/delete"
+          onsubmit="return confirm('이 글을 삭제할까요? 댓글도 함께 삭제됩니다.');">
+        <input type="password" name="password" placeholder="비밀번호" required maxlength="100">
+        <button type="submit" class="btn btn-danger">삭제</button>
+    </form>
+</div>
+
+<section class="comments">
+    <h3>댓글 {{ comments | length }}개</h3>
+
+    {% for comment in comments %}
+    <div class="comment">
+        <div class="comment-head">
+            <strong>{{ comment.writer }}</strong>
+            <span class="comment-date">{{ comment.created_at }}</span>
+            <form class="inline-form" method="post"
+                  action="/posts/{{ post.id }}/comments/{{ comment.id }}/delete"
+                  onsubmit="return confirm('이 댓글을 삭제할까요?');">
+                <input type="password" name="password" placeholder="비밀번호" required maxlength="100">
+                <button type="submit" class="btn btn-small">삭제</button>
+            </form>
+        </div>
+        <div class="comment-body">{{ comment.content }}</div>
+    </div>
+    {% else %}
+    <p class="empty">첫 댓글을 남겨 보세요.</p>
+    {% endfor %}
+
+    <form class="comment-form" method="post" action="/posts/{{ post.id }}/comments">
+        <div class="comment-form-row">
+            <input type="text" name="writer" placeholder="작성자" required maxlength="40">
+            <input type="password" name="password" placeholder="비밀번호 (삭제할 때 필요)" required maxlength="100">
+        </div>
+        <textarea name="content" rows="3" placeholder="댓글을 입력하세요" required maxlength="1000"></textarea>
+        <button type="submit" class="btn btn-primary">댓글 등록</button>
+    </form>
+</section>
+{% endblock %}
