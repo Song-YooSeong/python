@@ -3,7 +3,7 @@ import sysconfig
 
 datas = []
 binaries = []
-hiddenimports = ["PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets"]
+hiddenimports = ["PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "docx"]
 
 datas.append((f"{sysconfig.get_path('stdlib')}\\platform.py", "Lib"))
 

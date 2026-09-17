@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import wave
@@ -9,7 +10,7 @@ from pathlib import Path
 import sounddevice as sd
 from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QTextListFormat, QTextTable
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QStyleFactory,
     QSizePolicy,
     QTextBrowser,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +37,113 @@ from meeting_summary_service import MeetingSummaryService
 
 DEFAULT_SUMMARY_MODEL = "gpt-5.4"
 INPUT_HEIGHT = 32
+
+# 번호가 붙는 목록 종류입니다. 나머지는 글머리 기호 목록으로 봅니다.
+ORDERED_LIST_STYLES = (
+    QTextListFormat.Style.ListDecimal,
+    QTextListFormat.Style.ListLowerAlpha,
+    QTextListFormat.Style.ListUpperAlpha,
+    QTextListFormat.Style.ListLowerRoman,
+    QTextListFormat.Style.ListUpperRoman,
+)
+
+
+def _fragment_to_markdown(fragment, *, allow_bold: bool = True) -> str:
+    """화면의 글자 조각 하나를 Markdown 표기로 바꿉니다.
+
+    제목과 표 머리글은 Qt가 이미 굵게 그리므로 `**`를 덧붙이지 않습니다.
+    """
+    text = fragment.text().replace(" ", " ")
+    if not text.strip():
+        return text
+    char_format = fragment.charFormat()
+    # 앞뒤 공백은 강조 표시 밖에 두어야 Markdown이 제대로 해석됩니다.
+    leading = text[: len(text) - len(text.lstrip())]
+    trailing = text[len(text.rstrip()):]
+    marked = text.strip()
+    if char_format.fontItalic():
+        marked = f"*{marked}*"
+    if allow_bold and char_format.fontWeight() > QFont.Weight.Normal:
+        marked = f"**{marked}**"
+    return f"{leading}{marked}{trailing}"
+
+
+def _block_to_markdown(block, *, allow_bold: bool = True) -> str:
+    """문단 하나의 글자들을 Markdown 문자열로 모읍니다."""
+    parts = []
+    iterator = block.begin()
+    while not iterator.atEnd():
+        fragment = iterator.fragment()
+        if fragment.isValid():
+            parts.append(_fragment_to_markdown(fragment, allow_bold=allow_bold))
+        iterator += 1
+    return "".join(parts)
+
+
+def _block_prefix(block) -> str:
+    """문단이 제목인지 목록인지에 따라 앞에 붙일 Markdown 표기를 만듭니다."""
+    heading_level = block.blockFormat().headingLevel()
+    if heading_level:
+        return "#" * heading_level + " "
+    text_list = block.textList()
+    if text_list is None:
+        return ""
+    list_format = text_list.format()
+    # Qt의 목록 단계는 1부터 시작하므로 Markdown 들여쓰기는 한 단계 빼서 셉니다.
+    indent = "  " * max(list_format.indent() - 1, 0)
+    if list_format.style() in ORDERED_LIST_STYLES:
+        return f"{indent}{text_list.itemNumber(block) + 1}. "
+    return f"{indent}- "
+
+
+def _table_to_markdown(table) -> list[str]:
+    """화면의 표를 Markdown 표 문법으로 바꿉니다."""
+    lines = []
+    for row in range(table.rows()):
+        cells = []
+        # 머리글 행은 Markdown 표에서 이미 머리글로 취급되므로 굵게 표시를 빼 둡니다.
+        allow_bold = row > 0
+        for column in range(table.columns()):
+            cell = table.cellAt(row, column)
+            block = cell.firstCursorPosition().block()
+            last_position = cell.lastCursorPosition().block().position()
+            texts = []
+            while block.isValid():
+                texts.append(_block_to_markdown(block, allow_bold=allow_bold).strip())
+                if block.position() >= last_position:
+                    break
+                block = block.next()
+            cells.append(" ".join(text for text in texts if text))
+        lines.append("| " + " | ".join(cells) + " |")
+        if row == 0:
+            lines.append("| " + " | ".join(["---"] * table.columns()) + " |")
+    return lines
+
+
+def document_to_markdown(text_document) -> str:
+    """편집한 화면 내용을 Markdown으로 되돌립니다.
+
+    Qt가 제공하는 `toMarkdown()`은 굵은 글씨와 기울임 표시를 버리기 때문에
+    (확인 결과 `**굵게**`가 그냥 글자로 나옵니다) 직접 문단을 훑어서 만듭니다.
+    """
+    lines: list[str] = []
+    iterator = text_document.rootFrame().begin()
+    while not iterator.atEnd():
+        child_frame = iterator.currentFrame()
+        if isinstance(child_frame, QTextTable):
+            lines.extend(_table_to_markdown(child_frame))
+            lines.append("")
+        else:
+            block = iterator.currentBlock()
+            if block.isValid():
+                is_heading = bool(block.blockFormat().headingLevel())
+                text = _block_to_markdown(block, allow_bold=not is_heading).rstrip()
+                if is_heading and lines and lines[-1]:
+                    # 제목 앞은 한 줄 비워 두어야 다른 편집기에서도 제목으로 읽힙니다.
+                    lines.append("")
+                lines.append(f"{_block_prefix(block)}{text}" if text else "")
+        iterator += 1
+    return "\n".join(lines).strip()
 
 # 프로그램 이름 옆에 작게 표시할 설명입니다.
 APP_TITLE = "회의 녹음 요약"
@@ -180,6 +289,11 @@ class MeetingSummaryWindow(QMainWindow):
         self.chat_thread: ChatThread | None = None
         self.model_list_thread: ModelListThread | None = None
         self.chat_markdown = ""
+        # 화면에는 Markdown이 렌더링되어 표시되므로, Word 저장을 위해 원본 Markdown을 따로 보관합니다.
+        # 사용자가 화면에서 직접 고치면 summary_edited가 True가 되고, 저장할 때는
+        # 보관해 둔 원본 대신 화면에서 다시 읽은 Markdown을 사용합니다.
+        self.summary_markdown = ""
+        self.summary_edited = False
         self.selected_audio_path: Path | None = None
         # 버튼 활성화 판단에 쓰는 상태값입니다.
         self.phase = PHASE_BUSY
@@ -265,12 +379,11 @@ class MeetingSummaryWindow(QMainWindow):
         actions = QGridLayout()
         actions.setHorizontalSpacing(6)
         actions.setVerticalSpacing(6)
+        # 모든 동작 버튼은 같은 기본 모양을 쓰고, 색상은 이벤트 단계(state)로만 구분합니다.
         self.record_button = QPushButton("녹음 시작")
-        self.record_button.setObjectName("primaryButton")
         self.stop_button = QPushButton("녹음 중지")
         self.open_button = QPushButton("오디오 파일 열기")
         self.process_button = QPushButton("전사 및 요약")
-        self.process_button.setObjectName("primaryButton")
         self.save_button = QPushButton("결과 저장")
         self.action_buttons = (self.record_button, self.stop_button, self.open_button, self.process_button, self.save_button)
         for index, button in enumerate(self.action_buttons):
@@ -292,7 +405,7 @@ class MeetingSummaryWindow(QMainWindow):
         summary_layout = QVBoxLayout(summary_box)
         summary_layout.setContentsMargins(16, 18, 16, 16)
         summary_header = QHBoxLayout()
-        summary_hint = QLabel("AI가 정리한 회의 핵심 내용")
+        summary_hint = QLabel("AI가 정리한 회의 핵심 내용 (직접 수정할 수 있습니다)")
         summary_hint.setObjectName("cardHint")
         self.toggle_transcript_button = QPushButton("원문 보기")
         self.clear_summary_button = QPushButton("Clear")
@@ -303,17 +416,18 @@ class MeetingSummaryWindow(QMainWindow):
         summary_header.addWidget(self.toggle_transcript_button)
         summary_header.addWidget(self.clear_summary_button)
         summary_layout.addLayout(summary_header)
-        # QTextBrowser는 일반 텍스트뿐 아니라 Markdown 문법도 제목/목록으로 렌더링합니다.
-        self.summary_output = QTextBrowser()
-        self.summary_output.setReadOnly(True)
-        self.summary_output.setPlaceholderText("회의자료 요약 결과가 여기에 표시됩니다.")
+        # QTextEdit은 Markdown 문법을 제목/목록으로 보여 주면서 직접 고칠 수도 있습니다.
+        # 고친 내용은 toMarkdown()으로 다시 읽어 Word 저장에 사용합니다.
+        self.summary_output = QTextEdit()
+        self.summary_output.setReadOnly(False)
+        self.summary_output.setPlaceholderText("회의자료 요약 결과가 여기에 표시됩니다. 내용을 직접 고칠 수 있습니다.")
         summary_layout.addWidget(self.summary_output)
         self.transcript_box = QGroupBox("원문 전사")
         self.transcript_box.setObjectName("resultCard")
         transcript_layout = QVBoxLayout(self.transcript_box)
         transcript_layout.setContentsMargins(16, 18, 16, 16)
         transcript_header = QHBoxLayout()
-        transcript_hint = QLabel("회의 음성을 문자로 변환한 원문")
+        transcript_hint = QLabel("회의 음성을 문자로 변환한 원문 (직접 수정할 수 있습니다)")
         transcript_hint.setObjectName("cardHint")
         self.clear_transcript_button = QPushButton("Clear")
         self.clear_transcript_button.setObjectName("clearButton")
@@ -323,8 +437,8 @@ class MeetingSummaryWindow(QMainWindow):
         transcript_header.addWidget(self.clear_transcript_button)
         transcript_layout.addLayout(transcript_header)
         self.transcript_output = QPlainTextEdit()
-        self.transcript_output.setReadOnly(True)
-        self.transcript_output.setPlaceholderText("원문 전사 결과가 여기에 표시됩니다.")
+        self.transcript_output.setReadOnly(False)
+        self.transcript_output.setPlaceholderText("원문 전사 결과가 여기에 표시됩니다. 내용을 직접 고칠 수 있습니다.")
         transcript_layout.addWidget(self.transcript_output)
         self.transcript_box.setVisible(False)
         results.addWidget(summary_box)
@@ -353,7 +467,6 @@ class MeetingSummaryWindow(QMainWindow):
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("예: 결정된 사항과 담당자를 알려줘")
         self.chat_button = QPushButton("질문 보내기")
-        self.chat_button.setObjectName("primaryButton")
         chat_actions.addWidget(self.chat_input)
         chat_actions.addWidget(self.chat_button)
         chat_layout.addLayout(chat_actions)
@@ -382,6 +495,9 @@ class MeetingSummaryWindow(QMainWindow):
         self.clear_summary_button.clicked.connect(self.clear_summary)
         self.clear_transcript_button.clicked.connect(self.clear_transcript)
         self.clear_chat_button.clicked.connect(self.clear_chat)
+        # 사용자가 결과를 고치면 저장 버튼 활성화 여부를 다시 계산합니다.
+        self.summary_output.textChanged.connect(self.summary_text_changed)
+        self.transcript_output.textChanged.connect(self.transcript_text_changed)
         self.setStyleSheet(
             "QMainWindow { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f7f9fc, stop:1 #edf2f8); }"
             "QWidget { color: #172233; font-size: 13px; }"
@@ -392,11 +508,13 @@ class MeetingSummaryWindow(QMainWindow):
             "QGroupBox#sectionCard { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255,255,255,0.98), stop:1 rgba(248,250,252,0.96)); }"
             "QLabel#cardHint { color: #5d6874; font-size: 12px; font-weight: 400; }"
             "QLabel#statusLabel { color: #40566b; padding: 6px 2px; font-weight: 600; }"
-            "QLineEdit, QComboBox, QPlainTextEdit, QTextBrowser { border: 1px solid #dfe7f0; border-radius: 10px;"
+            "QLineEdit, QComboBox, QPlainTextEdit, QTextEdit, QTextBrowser { border: 1px solid #dfe7f0; border-radius: 10px;"
             " padding: 6px 10px; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #f9fbfd);"
             " selection-background-color: #cfe4ff; }"
-            "QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTextBrowser:focus { border: 1px solid rgba(29,78,216,0.35);"
-            " outline: none; }"
+            "QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus, QTextBrowser:focus {"
+            " border: 1px solid rgba(29,78,216,0.35); outline: none; }"
+            # 편집할 수 없는 상태(작업 중)에는 배경을 살짝 어둡게 해서 구분합니다.
+            "QPlainTextEdit[readOnly='true'], QTextEdit[readOnly='true'] { background: #f4f6f9; }"
             # 1) 평상시 활성화 상태: 밝은 회청색 배경 + 굵은 본문 글꼴
             "QPushButton { padding: 7px 12px; border: 1px solid rgba(15, 23, 42, 0.05); border-radius: 10px;"
             " background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f8fbff, stop:1 #ecf3f9); color: #172233;"
@@ -404,27 +522,20 @@ class MeetingSummaryWindow(QMainWindow):
             "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f2f8ff, stop:1 #e7eef6); }"
             "QPushButton:pressed { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #dbe7f4, stop:1 #ccdcee);"
             " color: #12325f; border: 1px solid rgba(29,78,216,0.30); }"
-            "QPushButton#primaryButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0f766e, stop:1 #0b5f59);"
-            " border-color: rgba(11,95,89,0.25); color: #ffffff; font-weight: 700; }"
-            "QPushButton#primaryButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0d6b64, stop:1 #0a4e4a); }"
-            "QPushButton#primaryButton:pressed { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0a4e4a, stop:1 #083d3a); }"
             # 2) 비활성화 상태: 채도와 글자 굵기를 낮춰 누를 수 없음을 분명히 보여 줍니다.
-            "QPushButton:disabled, QPushButton#primaryButton:disabled { color: #9aa4ae;"
+            "QPushButton:disabled { color: #9aa4ae;"
             " background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f1f4f7, stop:1 #e6ebf0);"
             " border: 1px solid rgba(15, 23, 42, 0.04); font-size: 13px; font-weight: 500; font-style: normal; }"
             # 3) 선택(클릭) 직후 상태: 파란색 강조 + 더 굵은 글꼴
-            "QPushButton[state='selected'], QPushButton[state='selected']:disabled,"
-            " QPushButton#primaryButton[state='selected'], QPushButton#primaryButton[state='selected']:disabled {"
+            "QPushButton[state='selected'], QPushButton[state='selected']:disabled {"
             " background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #dce9ff, stop:1 #c3daff);"
             " color: #16389c; border: 2px solid #2563eb; font-size: 13px; font-weight: 800; font-style: normal; }"
             # 4) 처리 중 상태: 주황색 + 기울임꼴로 작업이 진행 중임을 나타냅니다.
-            "QPushButton[state='working'], QPushButton[state='working']:disabled,"
-            " QPushButton#primaryButton[state='working'], QPushButton#primaryButton[state='working']:disabled {"
+            "QPushButton[state='working'], QPushButton[state='working']:disabled {"
             " background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f9a825, stop:1 #ef8c00);"
             " color: #ffffff; border: 2px solid #c96a00; font-size: 13px; font-weight: 800; font-style: italic; }"
             # 5) 완료 직후 상태: 초록색으로 잠깐 표시한 뒤 평상시 상태로 돌아갑니다.
-            "QPushButton[state='done'], QPushButton[state='done']:disabled,"
-            " QPushButton#primaryButton[state='done'], QPushButton#primaryButton[state='done']:disabled {"
+            "QPushButton[state='done'], QPushButton[state='done']:disabled {"
             " background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ddf7e7, stop:1 #b9ebcd);"
             " color: #0a6b39; border: 2px solid #1f9d55; font-size: 13px; font-weight: 800; font-style: normal; }"
             "QPushButton#clearButton { padding: 3px 8px; color: #5d6874; font-size: 12px; font-weight: 700; background: #f3f6f9; }"
@@ -482,6 +593,17 @@ class MeetingSummaryWindow(QMainWindow):
             self.clear_chat_button,
         ):
             button.setEnabled(is_ready)
+        # 결과는 평소에 직접 고칠 수 있고, 작업이 진행 중일 때만 잠급니다.
+        self._set_read_only(self.summary_output, not is_ready)
+        self._set_read_only(self.transcript_output, not is_ready)
+
+    def _set_read_only(self, editor, read_only: bool) -> None:
+        """편집 잠금 상태를 바꾸고, 바뀌었을 때만 배경색 스타일을 다시 적용합니다."""
+        if editor.isReadOnly() == read_only:
+            return
+        editor.setReadOnly(read_only)
+        editor.style().unpolish(editor)
+        editor.style().polish(editor)
 
     def _set_phase(
         self,
@@ -523,6 +645,37 @@ class MeetingSummaryWindow(QMainWindow):
         self.has_results = bool(
             self.summary_output.toPlainText().strip() or self.transcript_output.toPlainText().strip()
         )
+
+    # ------------------------------------------------------------------
+    # 결과 직접 편집
+    # ------------------------------------------------------------------
+    def summary_text_changed(self) -> None:
+        """사용자가 회의자료 요약을 직접 고쳤을 때 호출됩니다."""
+        self.summary_edited = True
+        self._refresh_result_flag()
+        self._refresh_enabled()
+
+    def transcript_text_changed(self) -> None:
+        """사용자가 원문 전사를 직접 고쳤을 때 호출됩니다."""
+        self._refresh_result_flag()
+        self._refresh_enabled()
+
+    def _set_summary_markdown(self, markdown_text: str) -> None:
+        """프로그램이 요약 내용을 채울 때 사용합니다(사용자 편집으로 보지 않습니다)."""
+        self.summary_markdown = markdown_text
+        self.summary_output.setMarkdown(markdown_text)
+        # setMarkdown도 textChanged를 일으키므로 플래그는 그 뒤에 되돌립니다.
+        self.summary_edited = False
+
+    def current_summary_markdown(self) -> str:
+        """저장에 사용할 요약 Markdown을 돌려줍니다.
+
+        사용자가 고치지 않았으면 OpenAI가 준 원본을 그대로 쓰고,
+        고쳤으면 화면 내용을 Markdown으로 다시 읽어 옵니다.
+        """
+        if self.summary_edited:
+            return document_to_markdown(self.summary_output.document())
+        return self.summary_markdown.strip() or self.summary_output.toPlainText().strip()
 
     # ------------------------------------------------------------------
     # 녹음
@@ -666,7 +819,7 @@ class MeetingSummaryWindow(QMainWindow):
 
     def processing_completed(self, result: dict) -> None:
         """백그라운드 작업이 끝났을 때 요약문과 전사문을 화면에 표시합니다."""
-        self.summary_output.setMarkdown(result.get("summary", ""))
+        self._set_summary_markdown(result.get("summary", ""))
         self.transcript_output.setPlainText(result.get("transcript", ""))
         self._refresh_result_flag()
         self._set_phase(PHASE_READY, done=self.process_button)
@@ -683,7 +836,9 @@ class MeetingSummaryWindow(QMainWindow):
     def clear_summary(self) -> None:
         """회의자료 요약 영역만 비웁니다."""
         self._mark_selected(self.clear_summary_button)
+        self.summary_markdown = ""
         self.summary_output.clear()
+        self.summary_edited = False
         self._refresh_result_flag()
         self._refresh_enabled()
         self._apply_button_state(self.clear_summary_button, BUTTON_IDLE)
@@ -777,27 +932,50 @@ class MeetingSummaryWindow(QMainWindow):
     # ------------------------------------------------------------------
     # 결과 저장
     # ------------------------------------------------------------------
+    def _default_word_filename(self) -> str:
+        """회의 제목을 파일 이름으로 쓰되, 파일 이름에 쓸 수 없는 문자는 지웁니다."""
+        title = self.title_input.text().strip() or "meeting-summary"
+        safe_title = re.sub(r'[\\/:*?"<>|]', "", title).strip() or "meeting-summary"
+        return f"{safe_title}-{datetime.now():%Y%m%d-%H%M%S}.docx"
+
     def save_results(self) -> None:
-        summary = self.summary_output.toPlainText().strip()
+        """회의자료 요약을 Word 문서로 저장합니다. 제목은 12pt, 본문은 10pt입니다."""
+        # 화면에 보이는 글자가 아니라 Markdown을 저장해야 제목/목록 구조가 유지됩니다.
+        # 사용자가 고친 내용이 있으면 고친 내용이 저장됩니다.
+        summary = self.current_summary_markdown()
         transcript = self.transcript_output.toPlainText().strip()
+        if not summary:
+            self.show_error("저장할 회의자료 요약 내용이 없습니다.")
+            return
         # 저장 위치를 고르는 동안 다른 버튼은 누를 수 없습니다.
         self._set_phase(PHASE_BUSY, selected=self.save_button)
         self.set_status("회의자료를 저장할 위치를 선택해 주세요.")
-        path, _ = QFileDialog.getSaveFileName(self, "회의자료 저장", "meeting-summary.txt", "텍스트 파일 (*.txt)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "회의자료 Word 저장", self._default_word_filename(), "Word 문서 (*.docx)"
+        )
         if not path:
             self._set_phase(PHASE_READY)
             self.set_status("결과 저장을 취소했습니다.")
             return
+        output_path = Path(path)
+        if output_path.suffix.lower() != ".docx":
+            output_path = output_path.with_suffix(".docx")
         self._set_phase(PHASE_BUSY, working=self.save_button)
-        self.set_status("회의자료를 파일로 저장하는 중입니다...")
+        self.set_status("회의자료를 Word 문서로 저장하는 중입니다...")
         try:
-            Path(path).write_text(f"[회의자료 요약]\n{summary}\n\n[원문 전사]\n{transcript}\n", encoding="utf-8")
-        except OSError as exc:
+            MeetingSummaryService().save_summary_as_word(
+                output_path=output_path,
+                summary=summary,
+                meeting_title=self.title_input.text().strip(),
+                source_name=self.selected_audio_path.name if self.selected_audio_path else "",
+                transcript=transcript,
+            )
+        except Exception as exc:
             self._set_phase(PHASE_READY)
             self.show_error(f"회의자료를 저장하지 못했습니다.\n{exc}")
             return
         self._set_phase(PHASE_READY, done=self.save_button)
-        self.set_status(f"회의자료를 저장했습니다: {path}")
+        self.set_status(f"회의자료를 Word 문서로 저장했습니다: {output_path}")
 
     def set_status(self, message: str) -> None:
         self.status_label.setText(message)
